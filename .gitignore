@@ -1,0 +1,9 @@
+﻿node_modules/
+dist/
+release/
+.npm-cache/
+.npm-cache2/
+.electron-cache/
+*.log
+.DS_Store
+Thumbs.db

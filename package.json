@@ -1,0 +1,53 @@
+{
+    "name": "xiaoboluo-workbench",
+    "version": "0.1.0",
+    "description": "小菠萝的工作台 - 本地离线个人工作台",
+    "main": "electron/main.cjs",
+    "author": "xiaoboluo",
+    "license": "MIT",
+    "scripts": {
+        "dev": "node scripts/dev.mjs",
+        "build": "vite build --configLoader native",
+        "start": "electron .",
+        "dist": "npm run build && electron-builder --win",
+        "dist:dir": "npm run build && electron-builder --dir"
+    },
+    "dependencies": {
+        "vue": "^3.5.13"
+    },
+    "devDependencies": {
+        "@esbuild/win32-x64": "^0.25.12",
+        "@vitejs/plugin-vue": "^5.2.1",
+        "electron": "^33.2.1",
+        "electron-builder": "^25.1.8",
+        "vite": "^6.0.7"
+    },
+    "build": {
+        "appId": "com.xiaoboluo.workbench",
+        "productName": "小菠萝的工作台",
+        "directories": {
+            "output": "release"
+        },
+        "files": [
+            "electron/**/*",
+            "dist/renderer/**/*",
+            "package.json"
+        ],
+        "win": {
+            "target": [
+                "nsis",
+                "portable"
+            ]
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true,
+            "createDesktopShortcut": true,
+            "createStartMenuShortcut": true,
+            "shortcutName": "小菠萝的工作台"
+        },
+        "portable": {
+            "artifactName": "小菠萝的工作台-${version}-portable.exe"
+        }
+    }
+}
