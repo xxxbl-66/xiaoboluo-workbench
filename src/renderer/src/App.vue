@@ -1,14 +1,12 @@
-﻿<template>
+<template>
   <div class="app-shell" :data-theme="settings.theme || 'light'">
-    <Sidebar :class="{ 'sidebar-expanded': sidebarExpanded }" :active="activeView" @navigate="activeView = $event" />
+    <Sidebar :class="{ 'sidebar-expanded': sidebarExpanded }" :active="activeView" :settings="settings" @navigate="activeView = $event" />
     <main class="main-area">
       <div class="layout-controls">
         <button class="ghost small" type="button" @click="sidebarExpanded = !sidebarExpanded">
           <LineIcon name="menu" :size="16" />
         </button>
-        <button class="ghost small" type="button" @click="dockExpanded = !dockExpanded">
-          <LineIcon name="panel" :size="16" />
-        </button>
+
       </div>
       <component
         :is="currentView"
@@ -17,7 +15,6 @@
         @settings-updated="handleSettingsUpdated"
       />
     </main>
-    <RightDock :class="{ 'dock-expanded': dockExpanded }" />
     <ToastHost />
   </div>
 </template>
@@ -25,7 +22,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import Sidebar from './components/Sidebar.vue';
-import RightDock from './components/RightDock.vue';
 import ToastHost from './components/ToastHost.vue';
 import LineIcon from './components/LineIcon.vue';
 import DashboardView from './views/DashboardView.vue';
@@ -41,14 +37,14 @@ import { workbench } from './composables/useWorkbench.js';
 
 const activeView = ref('dashboard');
 const sidebarExpanded = ref(false);
-const dockExpanded = ref(false);
 const settings = ref({
   theme: 'light',
-  extensions: { weather: false, cloudBackup: false },
+  extensions: { cloudBackup: false },
   chatProviders: {
     doubao: { enabled: true, url: 'https://www.doubao.com/chat/', label: '豆包' },
     deepseek: { enabled: true, url: 'https://chat.deepseek.com/', label: 'DeepSeek' },
-    gpt: { enabled: false, url: 'https://chatgpt.com/', label: 'GPT' }
+    qwen: { enabled: true, url: 'https://chat.qwen.ai/', label: '千问' },
+    gpt: { enabled: true, url: 'https://chatgpt.com/', label: 'GPT' }
   }
 });
 

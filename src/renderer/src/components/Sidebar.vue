@@ -1,12 +1,12 @@
-﻿<template>
+<template>
   <aside class="sidebar">
     <div class="brand">
-      <button class="avatar-button" type="button" title="点击更换头像" @click="changeAvatar">
+      <div class="avatar-button">
         <img v-if="user.avatarDataUrl" :src="user.avatarDataUrl" alt="头像" />
         <span v-else>{{ user.name ? user.name.slice(0, 1) : '小' }}</span>
-      </button>
+      </div>
       <div class="brand-text">
-        <input v-model="user.name" class="user-name-input" @blur="saveUser" />
+        <strong>{{ user.name || '小菠萝' }}</strong>
         <span>的工作台</span>
       </div>
     </div>
@@ -46,15 +46,19 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import LineIcon from './LineIcon.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 
-defineProps({
+const props = defineProps({
   active: {
     type: String,
     default: 'dashboard'
+  },
+  settings: {
+    type: Object,
+    default: () => ({ user: { name: '小菠萝', avatarDataUrl: '' }, navOrder: [] })
   }
 });
 
@@ -64,6 +68,19 @@ const checkin = ref({ todayChecked: false, streak: 0, total: 0, dates: [] });
 const settings = ref({ user: { name: '小菠萝', avatarDataUrl: '' }, navOrder: [] });
 const user = ref({ name: '小菠萝', avatarDataUrl: '' });
 const dragId = ref(null);
+
+watch(
+  () => props.settings,
+  (value) => {
+    if (!value) return;
+    settings.value = value;
+    user.value = {
+      name: value.user?.name || '小菠萝',
+      avatarDataUrl: value.user?.avatarDataUrl || ''
+    };
+  },
+  { immediate: true, deep: true }
+);
 
 const baseNavItems = [
   { id: 'dashboard', icon: 'dashboard', label: '驾驶舱' },
@@ -114,28 +131,6 @@ async function toggleCheckin() {
   try {
     checkin.value = await workbench.checkins.toggle();
     toast(checkin.value.todayChecked ? '打卡成功' : '已取消今日打卡');
-  } catch (error) {
-    toast(error.message, 'error');
-  }
-}
-
-async function changeAvatar() {
-  try {
-    const avatarDataUrl = await workbench.system.selectAvatar();
-    if (!avatarDataUrl) return;
-    user.value.avatarDataUrl = avatarDataUrl;
-    await saveUser();
-  } catch (error) {
-    toast(error.message, 'error');
-  }
-}
-
-async function saveUser() {
-  try {
-    const nextUser = { name: user.value.name || '小菠萝', avatarDataUrl: user.value.avatarDataUrl || '' };
-    const next = await workbench.settings.update({ user: nextUser });
-    settings.value = next;
-    user.value = { ...next.user };
   } catch (error) {
     toast(error.message, 'error');
   }

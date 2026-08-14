@@ -1,4 +1,4 @@
-﻿const crypto = require('node:crypto');
+const crypto = require('node:crypto');
 
 function id() {
   return crypto.randomUUID();
@@ -14,14 +14,15 @@ function defaultSettings() {
     user: { name: '小菠萝', avatarDataUrl: '' },
     navOrder: [],
     launchAtStartup: false,
+    timerRingtone: { type: 'builtin', id: 'chime' },
     extensions: {
-      weather: false,
       cloudBackup: false
     },
     chatProviders: {
       doubao: { enabled: true, url: 'https://www.doubao.com/chat/', label: '豆包' },
       deepseek: { enabled: true, url: 'https://chat.deepseek.com/', label: 'DeepSeek' },
-      gpt: { enabled: false, url: 'https://chatgpt.com/', label: 'GPT' }
+      qwen: { enabled: true, url: 'https://chat.qwen.ai/', label: '千问' },
+      gpt: { enabled: true, url: 'https://chatgpt.com/', label: 'GPT' }
     }
   };
 }

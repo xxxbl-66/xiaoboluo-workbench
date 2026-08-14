@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <section class="panel file-browser">
     <div class="browser-toolbar">
       <button class="icon-button" type="button" :disabled="!current.parent" @click="browse(current.parent)">⬅</button>
@@ -40,12 +40,12 @@
         <div class="file-name" :title="entry.name">{{ entry.name }}</div>
         <div class="file-meta">{{ entry.isDirectory ? '文件夹' : formatSize(entry.size) }}</div>
         <button
-          v-if="entry.isFile"
           class="file-favorite"
+          :class="{ active: isFavorite(entry) }"
           type="button"
-          title="添加到收藏"
-          @click.stop="addFavorite(entry)"
-        >☆</button>
+          :title="isFavorite(entry) ? '取消收藏' : (entry.isDirectory ? '收藏文件夹' : '添加到收藏')"
+          @click.stop="toggleFavorite(entry)"
+        >{{ isFavorite(entry) ? '★' : '☆' }}</button>
       </article>
     </div>
   </section>
@@ -61,6 +61,11 @@ const drives = ref([]);
 const current = ref({ path: '', parent: null, entries: [], error: null });
 const pathInput = ref('');
 const loading = ref(false);
+const favorites = ref([]);
+
+const favoritePathSet = computed(() => new Set(
+  favorites.value.map((item) => String(item.path || '').toLowerCase())
+));
 
 const breadcrumbs = computed(() => {
   const value = (current.value.path || '').replace(/\//g, '\\');
@@ -122,16 +127,33 @@ async function openEntry(entry) {
   if (!result.ok) toast(result.error || '无法打开文件', 'error');
 }
 
-async function addFavorite(entry) {
+function isFavorite(entry) {
+  return favoritePathSet.value.has(String(entry.path || '').toLowerCase());
+}
+
+async function loadFavorites() {
   try {
-    await workbench.files.favorites.add(entry.path);
-    toast('已添加到收藏');
+    favorites.value = await workbench.files.favorites.list();
+  } catch (_) {}
+}
+
+async function toggleFavorite(entry) {
+  try {
+    const existing = favorites.value.find((item) => String(item.path).toLowerCase() === String(entry.path).toLowerCase());
+    if (existing) {
+      favorites.value = await workbench.files.favorites.remove(existing.id);
+      toast('已取消收藏');
+    } else {
+      favorites.value = await workbench.files.favorites.add(entry.path);
+      toast('已添加到收藏');
+    }
   } catch (error) {
     toast(error.message, 'error');
   }
 }
 
 onMounted(async () => {
+  await loadFavorites();
   drives.value = await workbench.files.drives();
   const initial = drives.value.find((drive) => drive.name.toUpperCase() === 'C:') || drives.value[0];
   if (initial) await browse(initial.path);

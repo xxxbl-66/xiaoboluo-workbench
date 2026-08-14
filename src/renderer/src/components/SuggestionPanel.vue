@@ -49,7 +49,7 @@ const suggestions = computed(() => {
     .sort((a, b) => b.launchCount - a.launchCount)
     .slice(0, 3);
   for (const app of launched) {
-    items.push({ id: `app-${app.id}`, icon: '🚀', text: `你最近常打开「${app.name}」` });
+    items.push({ id: `app-${app.id}`, icon: 'app', text: `你最近常打开「${app.name}」` });
   }
 
   if (!items.length) {

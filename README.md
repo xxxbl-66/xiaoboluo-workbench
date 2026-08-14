@@ -1,110 +1,73 @@
-﻿# 小菠萝的工作台
+# 小菠萝的工作台
 
-一个使用 Electron + Vue3 开发的 Windows 本地个人工作台。完全离线运行，不登录账号，不依赖后台服务器；所有用户数据保存在 Windows 文档目录下的独立文件夹，程序更新不会丢失数据。
+一款完全离线的 Windows 本地个人工作台，使用 Electron + Vue 3 构建。所有用户数据保存在 Windows「文档」目录下的独立文件夹中，不依赖后台服务器，不强制登录。
 
-## 功能
+## 功能概览
 
-- 驾驶舱：快捷应用、桌面应用扫描、今日待办、工作流、本地建议。
-- 待办：长期目标进度、每日任务、优先级、截止时间、完成筛选、统计。
-- 日历：类苹果日历，聚合日程、待办截止日和休息日/节假日。
-- 今日复盘：待办完成度、阅读/专注时长，以及三个复盘问题。
-- 收藏夹：响应式卡片收藏文章、推文、视频和想法链接。
-- 我的书架：添加本地书籍，内置在线书城并可将下载内容归入书架。
-- 个性化：自定义头像和昵称，左侧导航可拖拽排序。
-- 文件：本地文件浏览、文件收藏、图片画廊、Markdown 便签。
-- 对话：工作台内嵌豆包 / DeepSeek / GPT 网页，默认不联网，进入并选择服务后才加载。
-- 设置：外观、开机自启、数据目录、备份导入导出、扩展功能开关。
+- 驾驶舱：今日待办进度、快捷应用、常用小组件。
+- 快捷应用：添加本地 exe、自定义名称与分组，点击直接启动外部程序。
+- 待办与目标：四象限排序、优先级与紧急程度、截止时间、提醒、长期目标打卡与进度追踪。
+- 日历：日程、待办截止日、农历与节日展示。
+- 收藏夹：文章、视频、链接、想法等收藏。
+- 今日复盘：记录今天做了什么、学到了什么、明天要改进什么。
+- 资源库：文件、文件夹、图片收藏与便签笔记。
+- 我的书架：本地书籍、在线书城与阅读器。
+- 对话：内置豆包、DeepSeek、千问、GPT 网页入口，均在工作台窗口内打开。
+- 设置：主题、开机自启动、数据目录、备份、铃声与本地数据删除。
 
-## 数据目录
+## 技术栈
 
-`C:\Users\<你的用户名>\Documents\小菠萝的工作台`
+- Electron 33
+- Vue 3 + Vite 6
+- 原生 Node.js / Electron IPC，无重型第三方 UI 框架
 
-- `data/`：所有 JSON 数据。
-- `thumbs/apps/`：应用图标缓存。
-- `thumbs/images/`：图片缩略图缓存。
-- `backups/`：本地配置备份。
-- `logs/`：本地日志。
-
-## 环境要求
+## 开发环境
 
 - Windows 10/11
-- Node.js 18 或更高版本
-- npm 10 或更高版本
+- Node.js 18+（推荐 20+）
+- npm
 
 ## 安装依赖
 
-```powershell
-cd C:\Users\86185\Desktop\工作台
+```bash
 npm install
 ```
 
-如果公司网络或代理导致 Electron 二进制下载失败，可先使用以下命令只安装依赖并跳过 Electron 下载，随后再在正常网络下重新执行 `npm install`：
+## 本地运行
 
-```powershell
-$env:ELECTRON_SKIP_BINARY_DOWNLOAD='1'
-npm install
-```
-
-## 双击启动
-
-在项目根目录双击 启动工作台.bat，脚本会检查依赖并自动启动。
-
-## 启动开发模式
-
-```powershell
+```bash
 npm run dev
 ```
 
-开发模式会同时启动 Vite 和 Electron，修改渲染层代码后会自动热更新。
-
 ## 构建渲染层
 
-```powershell
+```bash
 npm run build
 ```
 
-## 运行已构建版本
+## 打包 Windows 安装包与便携版
 
-```powershell
-npm start
-```
-
-## 打包 Windows exe
-
-```powershell
+```bash
 npm run dist
 ```
 
-输出目录为 `release/`，会生成 NSIS 安装包和便携版 exe。如果只想生成未安装的目录用于测试：
+打包结果默认输出到 `dist-release/<version>`。
 
-```powershell
-npm run dist:dir
-```
+## 数据位置
 
-## 离线与网络说明
-
-- 工作台本体不主动联网。
-- 文件、图片只保存原始路径，不复制大文件；图片仅缓存小尺寸缩略图。
-- 对话页的豆包 / DeepSeek / GPT 网页在用户主动选择服务后由内嵌 webview 加载。
-- GPT 当前仅预留接口，默认关闭。
-- 天气、云端备份等扩展接口默认关闭，关闭时不会发起任何网络请求。
+应用数据保存在 Windows 文档目录下的 `小菠萝的工作台` 文件夹内，不写入安装目录，便于软件升级后保留用户数据。
 
 ## 项目结构
 
 ```text
-electron/                 主进程与安全 IPC
-  main.cjs
-  preload.cjs
-  store.cjs
-  defaults.cjs
-  services/               应用、文件、启动、备份等原生能力
-scripts/dev.mjs           开发模式启动脚本
-src/renderer/             Vue3 渲染层
-  index.html
-  src/main.js
-  src/App.vue
-  src/views/
-  src/components/
-  src/assets/styles.css
-docs/                     设计与实现文档
+electron/          Electron 主进程与预加载脚本
+src/renderer/      Vue 3 渲染进程
+scripts/          开发启动脚本
+docs/             设计与规划文档
+build/             应用图标
+package.json       依赖与 electron-builder 配置
 ```
+
+## 隐私与离线
+
+应用本体不主动联网，天气、云备份等可选联网能力默认关闭。对话与在线书城使用内嵌浏览器访问用户主动打开的网页，由对应网站负责网络连接。

@@ -1,4 +1,4 @@
-﻿const { shell } = require('electron');
+const { shell } = require('electron');
 const { id } = require('../defaults.cjs');
 
 function readWorkflows(store) {
@@ -63,6 +63,11 @@ async function runWorkflow(store, workflowId) {
       results.push({ step: step.id, result: openExternal(step.url) });
     }
     await delay(350);
+  }
+
+  const failed = results.find((item) => item.result && item.result.ok === false);
+  if (failed) {
+    return { ok: false, error: failed.result.error || '工作流执行失败', results };
   }
   return { ok: true, results };
 }

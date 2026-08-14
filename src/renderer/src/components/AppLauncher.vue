@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <section class="panel">
     <div class="panel-head">
       <div>
@@ -6,6 +6,7 @@
         <p>启动本地程序，工作台不接管外部软件。</p>
       </div>
       <div class="panel-actions">
+        <button class="ghost" type="button" @click="scanFolder">选择文件夹</button>
         <button class="ghost" type="button" @click="scanDesktop">扫描桌面</button>
         <button class="primary" type="button" @click="openAddApp">添加应用</button>
       </div>
@@ -31,18 +32,19 @@
         :key="app.id"
         class="app-card"
         draggable="true"
-        @dragstart="dragAppId = app.id"
+        @dragstart="startDrag(app.id)"
         @dragover.prevent
         @drop="handleDrop(app.id)"
-        @dblclick="launch(app)"
+        @dragend="endDrag"
+        @click="clickApp(app)"
       >
         <img v-if="app.iconDataUrl" class="app-icon" :src="app.iconDataUrl" alt="" />
         <div v-else class="app-icon fallback"><LineIcon name="app" :size="24" /></div>
         <div class="app-name" :title="app.name">{{ app.name }}</div>
-        <button class="app-launch" type="button" @click="launch(app)">启动</button>
+
         <div class="app-card-actions">
-          <button type="button" title="编辑" @click="openEditApp(app)">✎</button>
-          <button type="button" title="删除" @click="removeApp(app)">🗑</button>
+          <button type="button" title="编辑" @click.stop="openEditApp(app)"><LineIcon name="edit" :size="14" /></button>
+          <button type="button" title="删除" @click.stop="removeApp(app)"><LineIcon name="trash" :size="14" /></button>
         </div>
       </article>
     </div>
@@ -85,6 +87,39 @@
         <button class="primary" type="button" @click="saveGroup">保存</button>
       </template>
     </Modal>
+<Modal v-model="showScanModal" title="选择要添加的应用" width="560px" @close="closeScanModal">
+      <div v-if="scanLoading" class="scan-state">正在扫描应用…</div>
+      <div v-else-if="scanCandidates.length" class="scan-candidate-list">
+        <button
+          v-for="candidate in scanCandidates"
+          :key="candidate.path"
+          type="button"
+          class="scan-candidate"
+          :class="{ selected: isSelected(candidate.path) }"
+          @click="toggleCandidate(candidate.path)"
+        >
+          <span class="scan-checkbox" :class="{ checked: isSelected(candidate.path) }">
+            <LineIcon v-if="isSelected(candidate.path)" name="check" :size="13" />
+          </span>
+          <img v-if="candidate.iconDataUrl" class="scan-icon" :src="candidate.iconDataUrl" alt="" />
+          <div v-else class="scan-icon fallback"><LineIcon name="app" :size="20" /></div>
+          <div class="scan-meta">
+            <div class="scan-name">{{ candidate.name }}</div>
+            <div class="scan-path">{{ candidate.path }}</div>
+          </div>
+        </button>
+      </div>
+      <div v-else class="scan-state">没有发现新的应用。</div>
+      <template #footer>
+        <button class="ghost" type="button" @click="toggleSelectAll">
+          {{ selectedPaths.length === scanCandidates.length ? '取消全选' : '全选' }}
+        </button>
+        <button class="ghost" type="button" @click="closeScanModal">取消</button>
+        <button class="primary" type="button" :disabled="!selectedPaths.length" @click="addSelectedCandidates">
+          添加选中 ({{ selectedPaths.length }})
+        </button>
+      </template>
+    </Modal>
   </section>
 </template>
 
@@ -103,8 +138,13 @@ const showGroupModal = ref(false);
 const editingApp = ref(null);
 const editingGroup = ref(null);
 const dragAppId = ref(null);
+const didDrag = ref(false);
 const appForm = ref({ path: '', name: '', groupId: 'default' });
 const groupForm = ref({ name: '' });
+const showScanModal = ref(false);
+const scanLoading = ref(false);
+const scanCandidates = ref([]);
+const selectedPaths = ref([]);
 
 const activeApps = computed(() => {
   const list = apps.value.filter((item) => item.groupId === activeGroupId.value);
@@ -176,14 +216,71 @@ async function launch(app) {
   }
 }
 
-async function scanDesktop() {
+async function runScan(folderPath) {
+  scanLoading.value = true;
+  scanCandidates.value = [];
+  selectedPaths.value = [];
+  showScanModal.value = true;
   try {
-    const added = await workbench.apps.scanDesktop(activeGroupId.value);
+    scanCandidates.value = await workbench.apps.scanCandidates(folderPath || '');
+  } catch (error) {
+    toast(error.message, 'error');
+    showScanModal.value = false;
+  } finally {
+    scanLoading.value = false;
+  }
+}
+
+async function scanDesktop() {
+  await runScan('');
+}
+
+async function scanFolder() {
+  const folderPath = await workbench.system.selectDirectory();
+  if (!folderPath) return;
+  await runScan(folderPath);
+}
+
+function toggleCandidate(path) {
+  selectedPaths.value = isSelected(path)
+    ? selectedPaths.value.filter((item) => item !== path)
+    : [...selectedPaths.value, path];
+}
+
+function isSelected(path) {
+  return selectedPaths.value.includes(path);
+}
+
+function toggleSelectAll() {
+  if (selectedPaths.value.length === scanCandidates.value.length) {
+    selectedPaths.value = [];
+  } else {
+    selectedPaths.value = scanCandidates.value.map((item) => item.path);
+  }
+}
+
+async function addSelectedCandidates() {
+  const chosen = scanCandidates.value.filter((item) => isSelected(item.path));
+  if (!chosen.length) return;
+  try {
+    const payload = chosen.map((item) => ({
+      path: item.path,
+      name: item.name,
+      iconSource: item.iconSource
+    }));
+    const added = await workbench.apps.addBatch(payload, activeGroupId.value);
     await loadApps();
-    toast(added.length ? `已添加 ${added.length} 个桌面应用` : '没有发现新的桌面应用');
+    showScanModal.value = false;
+    toast(added.length ? '已添加 ' + added.length + ' 个应用' : '未添加新应用');
   } catch (error) {
     toast(error.message, 'error');
   }
+}
+
+function closeScanModal() {
+  showScanModal.value = false;
+  scanCandidates.value = [];
+  selectedPaths.value = [];
 }
 
 function openGroupModal(group = null) {
@@ -213,6 +310,23 @@ async function saveGroup() {
   }
 }
 
+function startDrag(id) {
+  didDrag.value = true;
+  dragAppId.value = id;
+}
+
+function endDrag() {
+  setTimeout(() => {
+    didDrag.value = false;
+    dragAppId.value = null;
+  }, 0);
+}
+
+function clickApp(app) {
+  if (didDrag.value) return;
+  launch(app);
+}
+
 async function handleDrop(targetId) {
   if (!dragAppId.value || dragAppId.value === targetId) return;
   const ordered = activeApps.value.map((item) => item.id);
@@ -235,3 +349,144 @@ onMounted(async () => {
   await loadApps();
 });
 </script>
+
+<style scoped>
+.group-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0 4px;
+  scrollbar-width: none;
+}
+
+.group-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.group-tab {
+  flex: 0 0 auto;
+}
+
+.app-grid {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 4px 2px 12px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.app-grid::-webkit-scrollbar {
+  height: 8px;
+}
+
+.app-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-grid::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.app-grid .app-card {
+  flex: 0 0 132px;
+  min-height: 142px;
+  scroll-snap-align: start;
+  user-select: none;
+}
+
+.scan-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 380px;
+  overflow: auto;
+}
+
+.scan-candidate {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+.scan-candidate:hover {
+  background: var(--surface-2);
+}
+
+.scan-candidate.selected {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.scan-checkbox {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+  color: #fff;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.scan-checkbox.checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.scan-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.scan-icon.fallback {
+  display: grid;
+  place-items: center;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+}
+
+.scan-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scan-name {
+  font-size: 14px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-path {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-state {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-faint);
+}
+</style>

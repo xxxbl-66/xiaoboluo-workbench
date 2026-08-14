@@ -1,9 +1,10 @@
-﻿<template>
+<template>
   <div class="view todos-view">
     <header class="view-header">
       <div>
-        <h1>待办与目标</h1>
-        <p>管理每日任务和长期目标进度。</p>
+        <p class="view-kicker">WORKSPACE / TASKS</p>
+        <h1>{{ activeTab === 'todos' ? '今日待办' : '长期目标' }}</h1>
+        <p>{{ activeTab === 'todos' ? '整理今天要做的事，保持清晰、专注。' : '制定长期目标，设置期限并持续追踪进度。' }}</p>
       </div>
     </header>
 

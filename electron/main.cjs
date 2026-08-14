@@ -1,4 +1,4 @@
-﻿const path = require('node:path');
+const path = require('node:path');
 const fs = require('node:fs');
 const { app, BrowserWindow, ipcMain, dialog, shell, session, nativeImage } = require('electron');
 const { DataStore } = require('./store.cjs');
@@ -11,8 +11,38 @@ const backupService = require('./services/backup.cjs');
 let mainWindow = null;
 let store = null;
 
-function dataRoot() {
+function configRoot() {
   return path.join(app.getPath('documents'), '小菠萝的工作台');
+}
+
+function configFile() {
+  return path.join(configRoot(), 'config.json');
+}
+
+function configuredDataRoot() {
+  try {
+    if (!fs.existsSync(configFile())) return '';
+    const value = JSON.parse(fs.readFileSync(configFile(), 'utf8')).dataRoot;
+    return typeof value === 'string' && value.trim() ? value.trim() : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function dataRoot() {
+  return configuredDataRoot() || configRoot();
+}
+
+function writeDataRootConfig(root) {
+  fs.mkdirSync(configRoot(), { recursive: true });
+  fs.writeFileSync(configFile(), JSON.stringify({ dataRoot: root }, null, 2), 'utf8');
+}
+
+function isSameOrNested(left, right) {
+  const a = path.resolve(left).toLowerCase();
+  const b = path.resolve(right).toLowerCase();
+  if (a === b) return true;
+  return a.startsWith(`${b}\\`) || b.startsWith(`${a}\\`);
 }
 
 function safeHandle(channel, fn) {
@@ -24,6 +54,16 @@ function safeHandle(channel, fn) {
       return { ok: false, error: error.message || String(error) };
     }
   });
+}
+
+function applyLaunchAtStartup(enabled) {
+  if (process.platform !== 'win32') return;
+  const settings = {
+    openAtLogin: Boolean(enabled),
+    path: process.execPath
+  };
+  if (!app.isPackaged) settings.args = [app.getAppPath()];
+  app.setLoginItemSettings(settings);
 }
 
 function readGoals() {
@@ -126,6 +166,152 @@ function writeCalendarEvents(items) {
   store.write('calendar-events.json', items);
 }
 
+function recurrenceInfo(goal) {
+  const recurrence = goal && goal.recurrence;
+  if (!recurrence || !recurrence.type || recurrence.type === 'none') return null;
+  return {
+    type: recurrence.type,
+    days: Array.isArray(recurrence.days) ? recurrence.days.map((day) => Number(day)) : []
+  };
+}
+
+function recurrenceMatches(goal, date) {
+  const recurrence = recurrenceInfo(goal);
+  if (!recurrence) return false;
+  if (recurrence.type === 'daily') return true;
+  if (recurrence.type === 'weekly') return recurrence.days.includes(date.getDay());
+  return false;
+}
+
+function goalScheduleKeys(goal) {
+  const recurrence = recurrenceInfo(goal);
+  if (!recurrence) return [];
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = goal.targetDate
+    ? new Date(`${goal.targetDate}T00:00:00`)
+    : new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000);
+  if (Number.isNaN(end.getTime()) || end < start) return [];
+  const keys = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    if (recurrenceMatches(goal, cursor)) keys.push(todayKey(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return keys;
+}
+
+function goalProgressInfo(goal) {
+  const keys = goalScheduleKeys(goal);
+  const completed = new Set(Array.isArray(goal.completedDates) ? goal.completedDates : []);
+  const checkinCount = keys.filter((key) => completed.has(key)).length;
+  const scheduledCount = keys.length;
+  const progress = scheduledCount ? Math.round((checkinCount / scheduledCount) * 100) : 0;
+  return { checkinCount, scheduledCount, progress };
+}
+
+function goalsWithProgress(items) {
+  return items.map((goal) => ({ ...goal, ...goalProgressInfo(goal) }));
+}
+
+function updateGoalCheckin(goalId, date, completed) {
+  const goals = readGoals();
+  const goal = goals.find((item) => item.id === goalId);
+  if (!goal) return;
+  const set = new Set(Array.isArray(goal.completedDates) ? goal.completedDates : []);
+  if (completed) set.add(date);
+  else set.delete(date);
+  goal.completedDates = [...set].sort();
+  writeGoals(goals);
+}
+
+function syncGoalRecurringTasks() {
+  const goals = readGoals();
+  const todos = readTodos();
+  const events = readCalendarEvents();
+  const todayDate = new Date();
+  const today = todayKey(todayDate);
+
+  const goalById = new Map(goals.map((goal) => [goal.id, goal]));
+  const desiredTodos = new Map();
+
+  for (const goal of goals) {
+    if (!recurrenceMatches(goal, todayDate)) continue;
+    const key = `${goal.id}:${today}`;
+    const existing = todos.find((todo) => (
+      todo.generated && todo.sourceGoalId === goal.id && todo.sourceDate === today
+    ));
+    desiredTodos.set(key, existing || null);
+  }
+
+  const nextTodos = todos.filter((todo) => {
+    if (!todo.generated || !todo.sourceGoalId) return true;
+    return desiredTodos.has(`${todo.sourceGoalId}:${todo.sourceDate}`);
+  });
+
+  for (const [key, existing] of desiredTodos.entries()) {
+    if (existing) continue;
+    const [goalId, sourceDate] = key.split(':');
+    const goal = goalById.get(goalId);
+    if (!goal) continue;
+    nextTodos.push({
+      id: id(),
+      title: goal.recurrenceTask || goal.title || '长期目标任务',
+      priority: 'medium',
+      importance: 'high',
+      urgency: 'low',
+      dueDate: sourceDate,
+      reminderAt: null,
+      reminderFired: false,
+      completed: false,
+      sort: Date.now() + nextTodos.length,
+      generated: true,
+      sourceGoalId: goalId,
+      sourceDate,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  const desiredEvents = new Set();
+  for (const goal of goals) {
+    if (!recurrenceInfo(goal)) continue;
+    for (let offset = 0; offset < 14; offset += 1) {
+      const date = new Date();
+      date.setDate(date.getDate() + offset);
+      if (!recurrenceMatches(goal, date)) continue;
+      const key = `${goal.id}:${todayKey(date)}`;
+      desiredEvents.add(key);
+    }
+  }
+
+  const nextEvents = events.filter((event) => {
+    if (!event.generated || !event.sourceGoalId) return true;
+    return desiredEvents.has(`${event.sourceGoalId}:${event.sourceDate}`);
+  });
+
+  for (const key of desiredEvents) {
+    if (events.some((event) => event.generated && `${event.sourceGoalId}:${event.sourceDate}` === key)) continue;
+    const [goalId, sourceDate] = key.split(':');
+    const goal = goalById.get(goalId);
+    if (!goal) continue;
+    nextEvents.push({
+      id: id(),
+      date: sourceDate,
+      title: goal.recurrenceTask || goal.title || '长期目标任务',
+      note: '来自长期目标',
+      generated: true,
+      sourceGoalId: goalId,
+      sourceDate,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  if (JSON.stringify(nextTodos) !== JSON.stringify(todos)) writeTodos(nextTodos);
+  if (JSON.stringify(nextEvents) !== JSON.stringify(events)) writeCalendarEvents(nextEvents);
+}
+
 function readReviews() {
   return store.read('daily-review.json', []);
 }
@@ -158,6 +344,71 @@ function writeBooks(items) {
   store.write('books.json', items);
 }
 
+function readBookCategories() {
+  return store.read('book-categories.json', []);
+}
+
+function writeBookCategories(items) {
+  store.write('book-categories.json', items);
+}
+
+const DEFAULT_BOOK_STORES = [
+  { id: '10000txt', name: '10000txt', url: 'https://www.10000txt.com/', builtin: true },
+  { id: 'fanqie', name: '番茄小说', url: 'https://fanqienovel.com/', builtin: true }
+];
+
+function readBookStores() {
+  const items = store.read('book-stores.json', []);
+  const stored = Array.isArray(items) ? items : [];
+  const defaults = DEFAULT_BOOK_STORES.map((item) => ({ ...item, builtin: true }));
+  const defaultIds = new Set(defaults.map((item) => item.id));
+  const merged = [
+    ...defaults,
+    ...stored.filter((item) => item && !defaultIds.has(item.id))
+  ];
+  if (JSON.stringify(merged) !== JSON.stringify(stored)) {
+    writeBookStores(merged);
+  }
+  return merged;
+}
+
+function writeBookStores(items) {
+  store.write('book-stores.json', items);
+}
+
+function normalizeStoreUrl(raw) {
+  const value = String(raw || '').trim();
+  if (!value) throw new Error('请输入网址');
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch (_) {
+    try {
+      parsed = new URL(`https://${value}`);
+    } catch (_) {
+      throw new Error('网址格式不正确');
+    }
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('只支持 http 或 https 网址');
+  }
+  return parsed;
+}
+
+function allowedWebviewHosts() {
+  const chatHosts = ['doubao.com', 'deepseek.com', 'qwen.ai', 'chatgpt.com'];
+  const storeHosts = readBookStores()
+    .map((item) => {
+      try {
+        return new URL(item.url).hostname.replace(/^www\./, '');
+      } catch (_) {
+        return '';
+      }
+    })
+    .filter(Boolean);
+  return [...chatHosts, ...storeHosts];
+}
+
 function addBookFromPath(filePath) {
   const items = readBooks();
   const existing = items.find((item) => item.path === filePath);
@@ -167,12 +418,116 @@ function addBookFromPath(filePath) {
     title: path.basename(filePath, path.extname(filePath)),
     path: filePath,
     ext: path.extname(filePath).toLowerCase(),
+    categoryId: null,
+    favorite: false,
+    coverDataUrl: '',
     addedAt: new Date().toISOString()
   };
   items.unshift(entry);
   writeBooks(items);
   return entry;
 }
+
+const READER_DEFAULTS = {
+  prefs: {
+    fontSize: 18,
+    lineHeight: 1.9,
+    fontFamily: 'system',
+    theme: 'light'
+  },
+  progress: {}
+};
+
+function readReaderState() {
+  const state = store.read('reader.json', READER_DEFAULTS);
+  return {
+    prefs: { ...READER_DEFAULTS.prefs, ...(state.prefs || {}) },
+    progress: state.progress && typeof state.progress === 'object' ? state.progress : {}
+  };
+}
+
+function writeReaderState(state) {
+  store.write('reader.json', state);
+}
+
+function decodeBookBuffer(buffer) {
+  if (!buffer || !buffer.length) return { encoding: 'utf8', text: '' };
+  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+    return { encoding: 'utf8-bom', text: buffer.toString('utf8', 3) };
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    return { encoding: 'utf16-be', text: buffer.toString('utf16le').replace(/^\uFEFF/, '') };
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return { encoding: 'utf16-le', text: buffer.toString('utf16le').replace(/^\uFEFF/, '') };
+  }
+  const utf8 = buffer.toString('utf8');
+  if (!utf8.includes('\uFFFD')) {
+    return { encoding: 'utf8', text: utf8 };
+  }
+  try {
+    const gb = new TextDecoder('gb18030').decode(buffer);
+    if (gb.length && !gb.includes('\uFFFD')) {
+      return { encoding: 'gb18030', text: gb };
+    }
+  } catch (_) {
+    // 退回 utf8
+  }
+  return { encoding: 'utf8', text: utf8 };
+}
+
+function parseBookChapters(text) {
+  if (!text) return [{ index: 0, title: '全文', start: 0, end: 0 }];
+  const re = /^[ \t]*(第[0-9０-９一二三四五六七八九十百千万零〇两]+[卷部篇章回节集话]|序章|序言|楔子|番外|后记|尾声)[^\n]*$/gm;
+  const marks = [];
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    marks.push({ title: match[0].trim(), start: match.index });
+  }
+  if (!marks.length) {
+    return [{ index: 0, title: '全文', start: 0, end: text.length }];
+  }
+  const chapters = [];
+  for (let i = 0; i < marks.length; i++) {
+    const start = marks[i].start;
+    const end = i + 1 < marks.length ? marks[i + 1].start : text.length;
+    chapters.push({ index: i, title: marks[i].title, start, end });
+  }
+  if (chapters[0].start > 0) {
+    const preface = text.slice(0, chapters[0].start).trim();
+    const meaningful = preface.replace(/[\s\-—=*_·.。，,、:：;；"“”'‘’（）()【】\[\]<>《》]/g, '');
+    if (meaningful.length) {
+      chapters.unshift({ index: -1, title: '前言', start: 0, end: chapters[0].start });
+    } else {
+      chapters[0].start = 0;
+    }
+  }
+  chapters.forEach((item, i) => { item.index = i; });
+  return chapters;
+}
+
+function readBookFile(book) {
+  const ext = (book.ext || path.extname(book.path) || '').toLowerCase();
+  const supported = ['.txt', '.md', '.markdown', '.text', '.log', '.json'].includes(ext);
+  if (!supported) {
+    return { supported: false, title: book.title, path: book.path, ext };
+  }
+  const stat = fs.statSync(book.path);
+  if (stat.size > 30 * 1024 * 1024) {
+    throw new Error('文件过大，暂不支持内置阅读');
+  }
+  const decoded = decodeBookBuffer(fs.readFileSync(book.path));
+  return {
+    supported: true,
+    id: book.id,
+    title: book.title,
+    encoding: decoded.encoding,
+    text: decoded.text,
+    chapters: parseBookChapters(decoded.text),
+    size: stat.size
+  };
+}
+
 function registerIpc() {
   safeHandle('app:info', () => ({
     version: app.getVersion(),
@@ -181,6 +536,12 @@ function registerIpc() {
   }));
 
   safeHandle('settings:get', () => store.read('settings.json', defaultSettings()));
+  safeHandle('settings:clear-data', () => {
+    fs.rmSync(store.dataDir, { recursive: true, force: true });
+    store.ensureDirs();
+    return true;
+  });
+
   safeHandle('settings:update', (patch) => {
     const settings = store.read('settings.json', defaultSettings());
     const next = {
@@ -190,7 +551,7 @@ function registerIpc() {
       chatProviders: { ...settings.chatProviders, ...(patch.chatProviders || {}) }
     };
     if (typeof next.launchAtStartup === 'boolean') {
-      app.setLoginItemSettings({ openAtLogin: next.launchAtStartup });
+      applyLaunchAtStartup(next.launchAtStartup);
     }
     store.write('settings.json', next);
     return next;
@@ -244,6 +605,35 @@ function registerIpc() {
     return image.resize({ width: 128, height: 128 }).toDataURL();
   });
 
+  safeHandle('system:select-audio', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择铃声',
+      properties: ['openFile'],
+      filters: [
+        { name: '音频文件', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'] }
+      ]
+    });
+    if (result.canceled || !result.filePaths.length) return null;
+    const filePath = result.filePaths[0];
+    const stat = fs.statSync(filePath);
+    if (stat.size > 15 * 1024 * 1024) throw new Error('铃声文件不能超过 15MB');
+    const mimeByExt = {
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
+      '.m4a': 'audio/mp4',
+      '.aac': 'audio/aac',
+      '.flac': 'audio/flac'
+    };
+    const ext = path.extname(filePath).toLowerCase();
+    const mime = mimeByExt[ext] || 'audio/mpeg';
+    return {
+      name: path.basename(filePath),
+      dataUrl: `data:${mime};base64,${fs.readFileSync(filePath).toString('base64')}`,
+      size: stat.size
+    };
+  });
+
   safeHandle('system:select-book', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择书籍',
@@ -269,8 +659,38 @@ function registerIpc() {
   safeHandle('system:open-data-dir', () => launcherService.openPath(store.baseDir));
   safeHandle('system:open-logs-dir', () => launcherService.openPath(store.logsDir));
   safeHandle('system:open-external', (url) => launcherService.openExternal(url));
+  safeHandle('settings:change-data-dir', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择新的数据目录',
+      properties: ['openDirectory', 'createDirectory']
+    });
+    if (result.canceled || !result.filePaths.length) return { canceled: true };
 
-  safeHandle('apps:list', () => appService.readApps(store).map((item) => appService.hydrateApp(store, item)));
+    const next = path.resolve(result.filePaths[0]);
+    if (isSameOrNested(next, store.baseDir)) {
+      throw new Error('新目录不能与当前数据目录相同或互相包含');
+    }
+    try {
+      if (fs.existsSync(next) && fs.readdirSync(next).length) {
+        throw new Error('目标文件夹必须为空');
+      }
+      fs.cpSync(store.baseDir, next, { recursive: true, force: false });
+    } catch (error) {
+      throw new Error(error.message || '迁移数据失败，请选择空文件夹或新文件夹');
+    }
+
+    writeDataRootConfig(next);
+    setTimeout(() => {
+      app.relaunch();
+      app.exit(0);
+    }, 400);
+    return { canceled: false, dataDir: next };
+  });
+
+  safeHandle('apps:list', async () => {
+  await appService.ensureIcons(store);
+  return appService.readApps(store).map((item) => appService.hydrateApp(store, item));
+});
   safeHandle('apps:launch', async (appId) => {
     const result = await launcherService.launchApp(store, appId);
     if (!result.ok) throw new Error(result.error || '启动失败');
@@ -278,6 +698,8 @@ function registerIpc() {
   });
   safeHandle('apps:add', async (filePath, options) => appService.addApp(store, filePath, options || {}));
   safeHandle('apps:scan-desktop', (groupId) => appService.scanDesktop(store, groupId || 'default'));
+  safeHandle('apps:scan-candidates', (folderPath) => appService.scanCandidates(store, folderPath || ''));
+  safeHandle('apps:add-batch', (candidates, groupId) => appService.addBatch(store, candidates, groupId || 'default'));
   safeHandle('apps:update', (appId, patch) => {
     const apps = appService.readApps(store);
     const entry = apps.find((item) => item.id === appId);
@@ -326,47 +748,82 @@ function registerIpc() {
     return groups;
   });
 
-  safeHandle('goals:list', () => readGoals());
+  safeHandle('goals:list', () => goalsWithProgress(readGoals()));
   safeHandle('goals:create', (goal) => {
     const items = readGoals();
     const entry = {
       id: id(),
-      title: goal.title || '未命名目标',
+      title: String(goal.title || '').trim() || '未命名目标',
       description: goal.description || '',
-      progress: Math.max(0, Math.min(100, Number(goal.progress) || 0)),
+      progress: 0,
       note: goal.note || '',
       period: goal.period || 'month',
+      targetDate: goal.targetDate || null,
+      recurrence: goal.recurrence || { type: 'none', days: [] },
+      recurrenceTask: goal.recurrenceTask || goal.title || '',
+      completedDates: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
     items.push(entry);
     writeGoals(items);
-    return entry;
+    try { syncGoalRecurringTasks(); } catch (_) {}
+    return goalsWithProgress(readGoals()).find((item) => item.id === entry.id) || entry;
   });
   safeHandle('goals:update', (goalId, patch) => {
     const items = readGoals();
     const index = items.findIndex((item) => item.id === goalId);
     if (index === -1) throw new Error('目标不存在');
     const current = items[index];
-    if (typeof patch.progress === 'number') patch.progress = Math.max(0, Math.min(100, patch.progress));
+    if (patch.targetDate !== undefined) patch.targetDate = patch.targetDate || null;
+    if (patch.recurrenceTask !== undefined) patch.recurrenceTask = patch.recurrenceTask || current.title || '';
     items[index] = { ...current, ...patch, updatedAt: new Date().toISOString() };
     writeGoals(items);
-    return items[index];
+    try { syncGoalRecurringTasks(); } catch (_) {}
+    return goalsWithProgress(readGoals()).find((item) => item.id === goalId) || items[index];
+  });
+  safeHandle('goals:checkin', (goalId) => {
+    const goals = readGoals();
+    const goal = goals.find((item) => item.id === goalId);
+    if (!goal) throw new Error('目标不存在');
+    const today = todayKey();
+    const dates = new Set(Array.isArray(goal.completedDates) ? goal.completedDates : []);
+    const completed = !dates.has(today);
+    if (completed) dates.add(today);
+    else dates.delete(today);
+    goal.completedDates = [...dates].sort();
+    writeGoals(goals);
+    const todos = readTodos();
+    const todayTodo = todos.find((item) => (
+      item.generated && item.sourceGoalId === goalId && item.sourceDate === today
+    ));
+    if (todayTodo) {
+      todayTodo.completed = completed;
+      writeTodos(todos);
+    }
+    try { syncGoalRecurringTasks(); } catch (_) {}
+    return goalsWithProgress(readGoals()).find((item) => item.id === goalId) || goal;
   });
   safeHandle('goals:delete', (goalId) => {
     const items = readGoals().filter((item) => item.id !== goalId);
     writeGoals(items);
+    try { syncGoalRecurringTasks(); } catch (_) {}
     return items;
   });
 
   safeHandle('todos:list', () => readTodos());
   safeHandle('todos:create', (todo) => {
     const items = readTodos();
+    const priority = todo.priority || 'medium';
     const entry = {
       id: id(),
-      title: todo.title || '未命名任务',
-      priority: todo.priority || 'medium',
+      title: String(todo.title || '').trim() || '未命名任务',
+      priority,
+      importance: todo.importance || (priority === 'low' ? 'low' : 'high'),
+      urgency: todo.urgency || (priority === 'high' ? 'high' : 'low'),
       dueDate: todo.dueDate || null,
+      reminderAt: todo.reminderAt || null,
+      reminderFired: false,
       completed: false,
       sort: Date.now(),
       createdAt: new Date().toISOString(),
@@ -380,14 +837,27 @@ function registerIpc() {
     const items = readTodos();
     const index = items.findIndex((item) => item.id === todoId);
     if (index === -1) throw new Error('待办不存在');
+    if (patch.dueDate !== undefined) patch.dueDate = patch.dueDate || null;
+    if (patch.reminderAt !== undefined) patch.reminderAt = patch.reminderAt || null;
     items[index] = { ...items[index], ...patch, updatedAt: new Date().toISOString() };
+    const updated = items[index];
     writeTodos(items);
-    return items[index];
+    if (updated.generated && updated.sourceGoalId && typeof updated.completed === 'boolean') {
+      updateGoalCheckin(updated.sourceGoalId, updated.sourceDate || todayKey(), updated.completed);
+    }
+    try { syncGoalRecurringTasks(); } catch (_) {}
+    return updated;
   });
   safeHandle('todos:delete', (todoId) => {
-    const items = readTodos().filter((item) => item.id !== todoId);
-    writeTodos(items);
-    return items;
+    const items = readTodos();
+    const todo = items.find((item) => item.id === todoId);
+    const next = items.filter((item) => item.id !== todoId);
+    writeTodos(next);
+    if (todo && todo.generated && todo.sourceGoalId) {
+      updateGoalCheckin(todo.sourceGoalId, todo.sourceDate || todayKey(), false);
+    }
+    try { syncGoalRecurringTasks(); } catch (_) {}
+    return next;
   });
   safeHandle('todos:reorder', (orderedIds) => {
     const items = readTodos();
@@ -453,7 +923,13 @@ function registerIpc() {
     launcherService.writeWorkflows(store, items);
     return items;
   });
-  safeHandle('workflows:run', (workflowId) => launcherService.runWorkflow(store, workflowId));
+  safeHandle('workflows:run', async (workflowId) => {
+    const result = await launcherService.runWorkflow(store, workflowId);
+    if (result && result.ok === false) {
+      throw new Error(result.error || '工作流执行失败');
+    }
+    return result;
+  });
 
   safeHandle('checkins:get', () => {
     const dates = readCheckins();
@@ -538,6 +1014,7 @@ function registerIpc() {
     return items;
   });
 
+  safeHandle('review:list', () => readReviews().slice().sort((a, b) => (b.updatedAt || b.date || '').localeCompare(a.updatedAt || a.date || '')));
   safeHandle('review:get', (date) => getReviewRecord(date || todayKey()));
   safeHandle('review:update', (date, patch) => {
     const items = readReviews();
@@ -568,15 +1045,114 @@ function registerIpc() {
   });
   safeHandle('books:list', () => readBooks());
   safeHandle('books:add', (filePath) => addBookFromPath(filePath));
+  safeHandle('books:update', (bookId, patch) => {
+    const items = readBooks();
+    const book = items.find((item) => item.id === bookId);
+    if (!book) throw new Error('书籍不存在');
+    if (typeof patch.title === 'string' && patch.title.trim()) {
+      book.title = patch.title.trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'categoryId')) {
+      book.categoryId = patch.categoryId ? String(patch.categoryId) : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'favorite')) {
+      book.favorite = Boolean(patch.favorite);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'coverDataUrl')) {
+      book.coverDataUrl = typeof patch.coverDataUrl === 'string' ? patch.coverDataUrl : '';
+    }
+    book.updatedAt = new Date().toISOString();
+    writeBooks(items);
+    return book;
+  });
+  safeHandle('books:select-cover', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择书籍封面',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }]
+    });
+    if (result.canceled || !result.filePaths.length) return '';
+    const image = nativeImage.createFromPath(result.filePaths[0]);
+    if (image.isEmpty()) return '';
+    return image.resize({ width: 360 }).toDataURL();
+  });
   safeHandle('books:remove', (bookId) => {
     const items = readBooks().filter((item) => item.id !== bookId);
     writeBooks(items);
     return items;
   });
+  safeHandle('books:categories:list', () => readBookCategories());
+  safeHandle('books:categories:create', (name) => {
+    const items = readBookCategories();
+    const category = {
+      id: id(),
+      name: String(name || '未命名分类').trim() || '未命名分类',
+      createdAt: new Date().toISOString()
+    };
+    items.push(category);
+    writeBookCategories(items);
+    return category;
+  });
+  safeHandle('books:categories:update', (categoryId, name) => {
+    const items = readBookCategories();
+    const category = items.find((item) => item.id === categoryId);
+    if (!category) throw new Error('分类不存在');
+    category.name = String(name || category.name).trim() || category.name;
+    writeBookCategories(items);
+    return category;
+  });
+  safeHandle('books:categories:delete', (categoryId) => {
+    const categories = readBookCategories().filter((item) => item.id !== categoryId);
+    writeBookCategories(categories);
+    const books = readBooks().map((item) => (
+      item.categoryId === categoryId ? { ...item, categoryId: null } : item
+    ));
+    writeBooks(books);
+    return categories;
+  });
+  safeHandle('books:stores:list', () => readBookStores());
+  safeHandle('books:stores:add', (store) => {
+    const parsed = normalizeStoreUrl(store && store.url);
+    const items = readBookStores();
+    const entry = {
+      id: id(),
+      name: String(store && store.name || parsed.hostname).trim() || parsed.hostname,
+      url: parsed.href,
+      builtin: false,
+      createdAt: new Date().toISOString()
+    };
+    items.push(entry);
+    writeBookStores(items);
+    return entry;
+  });
+  safeHandle('books:stores:remove', (storeId) => {
+    const items = readBookStores();
+    const item = items.find((entry) => entry.id === storeId);
+    if (!item) throw new Error('书城不存在');
+    if (item.builtin) throw new Error('内置书城不能删除');
+    const next = items.filter((entry) => entry.id !== storeId);
+    writeBookStores(next);
+    return next;
+  });
   safeHandle('books:open', (bookId) => {
     const book = readBooks().find((item) => item.id === bookId);
     if (!book) throw new Error('书籍不存在');
     return launcherService.openPath(book.path);
+  });
+  safeHandle('books:read', (bookId) => {
+    const book = readBooks().find((item) => item.id === bookId);
+    if (!book) throw new Error('书籍不存在');
+    return readBookFile(book);
+  });
+  safeHandle('reader:get', () => readReaderState());
+  safeHandle('reader:update', (patch) => {
+    const current = readReaderState();
+    const next = {
+      prefs: { ...current.prefs, ...(patch && patch.prefs ? patch.prefs : {}) },
+      progress: { ...current.progress, ...(patch && patch.progress ? patch.progress : {}) }
+    };
+    writeReaderState(next);
+    return next;
   });
   safeHandle('backup:export', () => backupService.exportBackup(store));
   safeHandle('backup:import', async () => {
@@ -596,7 +1172,7 @@ function createWindow() {
     height: 860,
     minWidth: 1000,
     minHeight: 660,
-    backgroundColor: '#f5f7fb',
+    backgroundColor: '#f2f2f7',
     title: '小菠萝的工作台',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -608,8 +1184,6 @@ function createWindow() {
     }
   });
 
-  const allowedChatHosts = ['doubao.com', 'deepseek.com', 'chatgpt.com', '10000txt.com'];
-
   mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     webPreferences.nodeIntegration = false;
     webPreferences.contextIsolation = true;
@@ -618,7 +1192,7 @@ function createWindow() {
 
     try {
       const url = new URL(params.src || '');
-      const allowed = allowedChatHosts.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
+      const allowed = allowedWebviewHosts().some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
       if (!allowed) event.preventDefault();
     } catch (_) {
       event.preventDefault();
@@ -653,6 +1227,9 @@ app.on('web-contents-created', (_event, contents) => {
 
 app.whenReady().then(() => {
   store = new DataStore(dataRoot());
+  applyLaunchAtStartup(Boolean(store.read('settings.json', defaultSettings()).launchAtStartup));
+  syncGoalRecurringTasks();
+  setInterval(syncGoalRecurringTasks, 60 * 60 * 1000);
 
   const booksSession = session.fromPartition('persist:bookshelf');
   booksSession.on('will-download', (event, item) => {

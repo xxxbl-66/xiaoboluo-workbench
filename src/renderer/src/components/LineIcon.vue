@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <svg
     class="line-icon"
     :width="size"

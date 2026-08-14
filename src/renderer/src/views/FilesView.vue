@@ -1,9 +1,10 @@
-﻿<template>
+<template>
   <div class="view files-view">
     <header class="view-header">
       <div>
+        <p class="view-kicker">WORKSPACE / FILES</p>
         <h1>文件</h1>
-        <p>浏览本地文件，收藏常用文件与图片，记录便签。</p>
+        <p>浏览本地文件，收藏文件、文件夹与图片，记录便签。</p>
       </div>
     </header>
 

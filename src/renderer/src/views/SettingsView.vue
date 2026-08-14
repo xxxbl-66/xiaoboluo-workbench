@@ -1,19 +1,31 @@
-﻿<template>
+<template>
   <div class="view settings-view">
     <header class="view-header">
       <div>
+        <p class="view-kicker">WORKSPACE / SETTINGS</p>
         <h1>设置</h1>
-        <p>调节外观、启动项、数据与预留扩展。</p>
+        <p>调整外观与本地数据，工作台保持离线运行。</p>
       </div>
     </header>
 
+    <section class="panel user-card">
+      <button class="user-card__avatar" type="button" title="更换头像" @click="changeAvatar">
+        <img v-if="userForm.avatarDataUrl" :src="userForm.avatarDataUrl" alt="头像" />
+        <span v-else>{{ (userForm.name || '小').slice(0, 1) }}</span>
+      </button>
+      <div class="user-card__info">
+        <input v-model="userForm.name" class="user-card__name" @blur="saveUser" />
+        <p>点击头像更换图片，修改名字后按 Enter 或点击空白处保存。</p>
+      </div>
+    </section>
+
     <div class="settings-columns">
       <section class="panel settings-panel">
-        <h2>外观</h2>
+        <h2>通用</h2>
         <div class="setting-row">
           <div>
             <strong>主题</strong>
-            <p>跟随你的使用习惯切换明暗。</p>
+            <p>切换浅色或深色工作台外观。</p>
           </div>
           <div class="segmented-tabs inline">
             <button :class="{ active: settings.theme !== 'dark' }" type="button" @click="updateSettings({ theme: 'light' })">浅色</button>
@@ -34,20 +46,6 @@
       </section>
 
       <section class="panel settings-panel">
-        <h2>对话服务</h2>
-        <div v-for="provider in providerEntries" :key="provider.key" class="setting-row">
-          <div>
-            <strong>{{ provider.label }}</strong>
-            <p>{{ provider.description }}</p>
-          </div>
-          <label class="switch">
-            <input type="checkbox" :checked="provider.enabled" :disabled="provider.key === 'gpt'" @change="toggleProvider(provider.key, $event.target.checked)" />
-            <span></span>
-          </label>
-        </div>
-      </section>
-
-      <section class="panel settings-panel">
         <h2>数据与备份</h2>
         <div class="setting-row column">
           <div>
@@ -56,6 +54,7 @@
           </div>
           <div class="button-row">
             <button class="ghost small" type="button" @click="workbench.system.openDataDir()">打开数据目录</button>
+            <button class="ghost small" type="button" @click="changeDataDir">更改位置</button>
             <button class="ghost small" type="button" @click="exportBackup">导出备份</button>
             <button class="ghost small" type="button" @click="importBackup">导入备份</button>
           </div>
@@ -63,27 +62,39 @@
       </section>
 
       <section class="panel settings-panel">
-        <h2>预留扩展</h2>
-        <p class="section-note">这些接口默认关闭，当前版本不会在关闭状态下发起任何网络请求。</p>
-        <div class="setting-row">
+        <h2>计时器铃声</h2>
+        <div class="setting-row column">
           <div>
-            <strong>天气</strong>
-            <p>暂未开放，接口已预留。</p>
+            <strong>提醒铃声</strong>
+            <p>计时结束后播放的声音，可选择内置提示音或上传自定义音频。</p>
           </div>
-          <label class="switch">
-            <input type="checkbox" :checked="settings.extensions.weather" @change="toggleExtension('weather', $event.target.checked)" />
-            <span></span>
-          </label>
+          <div class="ringtone-options">
+            <button
+              v-for="tone in builtinTones"
+              :key="tone.id"
+              class="ghost small"
+              :class="{ active: currentRingtoneId === tone.id }"
+              type="button"
+              @click="chooseBuiltinTone(tone.id)"
+            >
+              {{ tone.label }}
+            </button>
+            <button class="ghost small" :class="{ active: currentRingtoneId === 'custom' }" type="button" @click="chooseCustomTone">
+              上传自定义铃声
+            </button>
+          </div>
+          <p v-if="customToneName" class="ringtone-current">当前自定义铃声：{{ customToneName }}</p>
         </div>
-        <div class="setting-row">
+      </section>
+
+      <section class="panel settings-panel">
+        <h2>删除数据</h2>
+        <div class="setting-row column">
           <div>
-            <strong>云端配置备份</strong>
-            <p>暂未开放，当前仅支持本地备份。</p>
+            <strong>删除全部本地数据</strong>
+            <p>清空待办、目标、收藏、便签、日历、书架索引等数据，操作不可撤销。</p>
           </div>
-          <label class="switch">
-            <input type="checkbox" :checked="settings.extensions.cloudBackup" @change="toggleExtension('cloudBackup', $event.target.checked)" />
-            <span></span>
-          </label>
+          <button class="danger-button" type="button" @click="clearAllData">删除本地数据</button>
         </div>
       </section>
 
@@ -102,21 +113,27 @@ import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 
 const props = defineProps({
-  settings: { type: Object, default: () => ({ extensions: {}, chatProviders: {} }) }
+  settings: { type: Object, default: () => ({ extensions: {} }) }
 });
 
 const emit = defineEmits(['settings-updated']);
 
 const info = ref({ version: '', dataDir: '' });
+const userForm = ref({ name: '小菠萝', avatarDataUrl: '' });
 
-const providerEntries = computed(() => {
-  const configured = props.settings.chatProviders || {};
-  return [
-    { key: 'doubao', label: '豆包', enabled: true, description: '字节跳动 AI 助手', ...(configured.doubao || {}) },
-    { key: 'deepseek', label: 'DeepSeek', enabled: true, description: '深度求索 AI 助手', ...(configured.deepseek || {}) },
-    { key: 'gpt', label: 'GPT', enabled: false, description: '接口预留，网络可用后开放', ...(configured.gpt || {}) }
-  ];
-});
+const builtinTones = [
+  { id: 'chime', label: '清脆提示音' },
+  { id: 'wind', label: '柔和风铃' },
+  { id: 'beep', label: '电子蜂鸣' }
+];
+
+const currentRingtone = computed(() => props.settings.timerRingtone || { type: 'builtin', id: 'chime' });
+const currentRingtoneId = computed(() => (
+  currentRingtone.value.type === 'custom' ? 'custom' : currentRingtone.value.id || 'chime'
+));
+const customToneName = computed(() => (
+  currentRingtone.value.type === 'custom' ? currentRingtone.value.name : ''
+));
 
 async function updateSettings(patch) {
   try {
@@ -127,20 +144,67 @@ async function updateSettings(patch) {
   }
 }
 
-async function toggleProvider(key, enabled) {
-  const nextProviders = {
-    ...props.settings.chatProviders,
-    [key]: { ...(props.settings.chatProviders[key] || {}), enabled }
-  };
-  await updateSettings({ chatProviders: nextProviders });
+async function changeAvatar() {
+  try {
+    const avatarDataUrl = await workbench.system.selectAvatar();
+    if (!avatarDataUrl) return;
+    userForm.value.avatarDataUrl = avatarDataUrl;
+    await saveUser();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
-async function toggleExtension(key, enabled) {
-  const nextExtensions = {
-    ...props.settings.extensions,
-    [key]: enabled
-  };
-  await updateSettings({ extensions: nextExtensions });
+async function saveUser() {
+  try {
+    const nextUser = {
+      name: userForm.value.name.trim() || '小菠萝',
+      avatarDataUrl: userForm.value.avatarDataUrl || ''
+    };
+    userForm.value = { ...nextUser };
+    await updateSettings({ user: nextUser });
+    toast('用户信息已保存');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function chooseBuiltinTone(id) {
+  await updateSettings({ timerRingtone: { type: 'builtin', id } });
+}
+
+async function chooseCustomTone() {
+  try {
+    const audio = await workbench.system.selectAudio();
+    if (!audio) return;
+    await updateSettings({
+      timerRingtone: { type: 'custom', id: 'custom', name: audio.name, dataUrl: audio.dataUrl }
+    });
+    toast('自定义铃声已保存');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function clearAllData() {
+  if (!window.confirm('确定要删除全部本地数据吗？此操作不可撤销。')) return;
+  try {
+    await workbench.settings.clearData();
+    toast('本地数据已删除，工作台即将刷新');
+    setTimeout(() => window.location.reload(), 600);
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function changeDataDir() {
+  try {
+    const result = await workbench.system.changeDataDir();
+    if (result && result.canceled) return;
+    toast("数据目录已更新，应用即将重启");
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 async function exportBackup() {
@@ -163,8 +227,104 @@ async function importBackup() {
 }
 
 onMounted(async () => {
+  userForm.value = {
+    name: props.settings.user?.name || '小菠萝',
+    avatarDataUrl: props.settings.user?.avatarDataUrl || ''
+  };
   try {
     info.value = await workbench.app.info();
   } catch (_) {}
 });
 </script>
+
+<style scoped>
+.ringtone-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ringtone-options .active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.ringtone-current {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.user-card__avatar {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.user-card__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.user-card__name {
+  width: min(220px, 100%);
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  padding: 8px 10px;
+  font-size: 19px;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.user-card__name:focus {
+  border-color: var(--primary);
+  background: var(--surface-2);
+}
+
+.user-card__info p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.danger-button {
+  padding: 9px 16px;
+  border: 1px solid #dc2626;
+  border-radius: 10px;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.danger-button:hover {
+  background: #dc2626;
+  border-color: #b91c1c;
+}
+</style>

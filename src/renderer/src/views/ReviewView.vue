@@ -1,7 +1,8 @@
-﻿<template>
+<template>
   <div class="view review-view">
     <header class="view-header">
       <div>
+        <p class="view-kicker">WORKSPACE / REVIEW</p>
         <h1>今日复盘</h1>
         <p>{{ todayLabel }} · 记录今天做得怎么样，明天怎么调整。</p>
       </div>
@@ -43,6 +44,31 @@
         <h3>明天要改进什么？</h3>
         <textarea v-model="record.answers.whatImprove" placeholder="下一步最小改进动作…" @input="scheduleSave"></textarea>
       </div>
+
+      <button class="review-save-button" type="button" @click="saveToday">保存今日复盘</button>
+    </section>
+
+    <section class="panel review-history">
+      <div class="panel-head">
+        <div>
+          <h2>历史复盘</h2>
+          <p>回看之前的记录，看见自己的变化。</p>
+        </div>
+      </div>
+
+      <div v-if="historyRecords.length" class="review-history-list">
+        <article v-for="item in historyRecords" :key="item.date" class="review-history-item">
+          <div class="review-history-meta">
+            <strong>{{ formatHistoryDate(item.date) }}</strong>
+            <span>{{ formatHistoryTime(item.updatedAt) }}</span>
+          </div>
+          <p v-if="item.answers?.whatDid">做了什么：{{ item.answers.whatDid }}</p>
+          <p v-if="item.answers?.whatLearned">学到了：{{ item.answers.whatLearned }}</p>
+          <p v-if="item.answers?.whatImprove">要改进：{{ item.answers.whatImprove }}</p>
+          <p v-if="!item.answers?.whatDid && !item.answers?.whatLearned && !item.answers?.whatImprove" class="review-history-empty">这一天没有留下文字记录。</p>
+        </article>
+      </div>
+      <div v-else class="empty-state small"><p>还没有历史复盘记录。</p></div>
     </section>
   </div>
 </template>
@@ -53,6 +79,7 @@ import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 
 const todos = ref([]);
+const history = ref([]);
 const record = ref({
   date: '',
   readingMinutes: 0,
@@ -68,6 +95,7 @@ const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(
 const totalTodos = computed(() => todos.value.length);
 const completedTodos = computed(() => todos.value.filter((item) => item.completed).length);
 const todoPercent = computed(() => (totalTodos.value ? Math.round((completedTodos.value / totalTodos.value) * 100) : 0));
+const historyRecords = computed(() => history.value.filter((item) => item.date !== dateKey));
 
 function ensureRecord(next) {
   record.value = {
@@ -82,13 +110,29 @@ function ensureRecord(next) {
   };
 }
 
+function formatHistoryDate(value) {
+  if (!value) return '';
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function formatHistoryTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
 async function loadData() {
-  const [todoList, review] = await Promise.all([
+  const [todoList, review, reviewHistory] = await Promise.all([
     workbench.todos.list(),
-    workbench.review.get(dateKey)
+    workbench.review.get(dateKey),
+    workbench.review.list()
   ]);
   todos.value = todoList;
   ensureRecord(review);
+  history.value = reviewHistory;
 }
 
 function scheduleSave() {
@@ -114,9 +158,17 @@ async function saveReview() {
       }
     });
     ensureRecord(next);
+    history.value = await workbench.review.list();
+    return next;
   } catch (error) {
     toast(error.message, 'error');
+    return null;
   }
+}
+
+async function saveToday() {
+  await saveReview();
+  toast('今日复盘已保存');
 }
 
 onMounted(loadData);
@@ -128,3 +180,61 @@ onBeforeUnmount(() => {
   }
 });
 </script>
+
+<style scoped>
+.review-save-button {
+  width: 100%;
+  margin-top: 6px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.review-history {
+  margin-top: 18px;
+}
+
+.review-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-history-item {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.review-history-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.review-history-meta strong {
+  font-size: 15px;
+}
+
+.review-history-meta span {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.review-history-item p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.review-history-empty {
+  color: var(--text-faint);
+}
+</style>

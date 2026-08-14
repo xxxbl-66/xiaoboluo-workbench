@@ -1,7 +1,16 @@
-﻿const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
+
+function toPlain(value) {
+  if (value === undefined || value === null || typeof value !== 'object') return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return value;
+  }
+}
 
 async function invoke(channel, ...args) {
-  const result = await ipcRenderer.invoke(channel, ...args);
+  const result = await ipcRenderer.invoke(channel, ...args.map(toPlain));
   if (!result || result.ok === false) {
     throw new Error((result && result.error) || '操作失败');
   }
@@ -14,17 +23,20 @@ const api = {
   },
   settings: {
     get: () => invoke('settings:get'),
-    update: (patch) => invoke('settings:update', patch)
+    update: (patch) => invoke('settings:update', patch),
+    clearData: () => invoke('settings:clear-data')
   },
   system: {
     selectApp: () => invoke('system:select-app'),
     selectFile: () => invoke('system:select-file'),
     selectImage: () => invoke('system:select-image'),
     selectAvatar: () => invoke('system:select-avatar'),
+    selectAudio: () => invoke('system:select-audio'),
     selectBook: () => invoke('system:select-book'),
     selectDirectory: () => invoke('system:select-directory'),
     openPath: (filePath) => invoke('system:open-path', filePath),
     openDataDir: () => invoke('system:open-data-dir'),
+    changeDataDir: () => invoke('settings:change-data-dir'),
     openLogsDir: () => invoke('system:open-logs-dir'),
     openExternal: (url) => invoke('system:open-external', url)
   },
@@ -33,6 +45,8 @@ const api = {
     launch: (appId) => invoke('apps:launch', appId),
     add: (filePath, options) => invoke('apps:add', filePath, options),
     scanDesktop: (groupId) => invoke('apps:scan-desktop', groupId),
+    scanCandidates: (folderPath) => invoke('apps:scan-candidates', folderPath),
+    addBatch: (candidates, groupId) => invoke('apps:add-batch', candidates, groupId),
     update: (appId, patch) => invoke('apps:update', appId, patch),
     remove: (appId) => invoke('apps:delete', appId),
     reorder: (groupId, orderedIds) => invoke('apps:reorder', groupId, orderedIds)
@@ -47,7 +61,8 @@ const api = {
     list: () => invoke('goals:list'),
     create: (goal) => invoke('goals:create', goal),
     update: (goalId, patch) => invoke('goals:update', goalId, patch),
-    remove: (goalId) => invoke('goals:delete', goalId)
+    remove: (goalId) => invoke('goals:delete', goalId),
+    checkin: (goalId) => invoke('goals:checkin', goalId)
   },
   todos: {
     list: () => invoke('todos:list'),
@@ -105,13 +120,29 @@ const api = {
     remove: (eventId) => invoke('calendar:delete', eventId)
   },
   review: {
+    list: () => invoke('review:list'),
     get: (date) => invoke('review:get', date),
     update: (date, patch) => invoke('review:update', date, patch)
-  },  books: {
+  },
+  books: {
     list: () => invoke('books:list'),
     add: (filePath) => invoke('books:add', filePath),
+    update: (bookId, patch) => invoke('books:update', bookId, patch),
+    selectCover: () => invoke('books:select-cover'),
     remove: (bookId) => invoke('books:remove', bookId),
     open: (bookId) => invoke('books:open', bookId),
+    read: (bookId) => invoke('books:read', bookId),
+    categories: {
+      list: () => invoke('books:categories:list'),
+      create: (name) => invoke('books:categories:create', name),
+      update: (categoryId, name) => invoke('books:categories:update', categoryId, name),
+      remove: (categoryId) => invoke('books:categories:delete', categoryId)
+    },
+    stores: {
+      list: () => invoke('books:stores:list'),
+      add: (store) => invoke('books:stores:add', store),
+      remove: (storeId) => invoke('books:stores:remove', storeId)
+    },
     onChanged: (callback) => {
       const listener = (_event, book) => callback(book);
       ipcRenderer.on('books:changed', listener);
@@ -121,6 +152,10 @@ const api = {
   backup: {
     export: () => invoke('backup:export'),
     import: () => invoke('backup:import')
+  },
+  reader: {
+    get: () => invoke('reader:get'),
+    update: (patch) => invoke('reader:update', patch)
   }
 };
 

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <section class="panel">
     <div class="panel-head">
       <div>
@@ -12,7 +12,7 @@
       <article v-for="workflow in workflows" :key="workflow.id" class="workflow-card">
         <div class="workflow-main">
           <strong>{{ workflow.name }}</strong>
-          <span>{{ workflow.steps.length }} 个步骤</span>
+          <span>{{ (workflow.steps || []).length }} 个步骤</span>
         </div>
         <div class="workflow-actions">
           <button class="ghost small" type="button" @click="runWorkflow(workflow)">运行</button>
@@ -102,20 +102,40 @@ function addStep() {
   form.value.steps.push(makeStep('app'));
 }
 
+function normalizeWorkflow(item) {
+  return { ...item, steps: Array.isArray(item.steps) ? item.steps : [] };
+}
+
 async function loadData() {
-  workflows.value = await workbench.workflows.list();
-  apps.value = await workbench.apps.list();
+  try {
+    workflows.value = (await workbench.workflows.list()).map(normalizeWorkflow);
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+  try {
+    apps.value = await workbench.apps.list();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 async function saveWorkflow() {
   try {
     const payload = {
       name: form.value.name,
-      steps: form.value.steps.filter((step) => {
-        if (step.type === 'app') return step.appId;
-        if (step.type === 'file') return step.path;
-        return step.url;
-      })
+      steps: form.value.steps
+        .filter((step) => {
+          if (step.type === 'app') return step.appId;
+          if (step.type === 'file') return step.path;
+          return step.url;
+        })
+        .map((step) => ({
+          id: step.id,
+          type: step.type,
+          appId: step.appId || '',
+          path: step.path || '',
+          url: step.url || ''
+        }))
     };
     if (!payload.name.trim()) throw new Error('请输入工作流名称');
     if (!payload.steps.length) throw new Error('至少添加一个步骤');

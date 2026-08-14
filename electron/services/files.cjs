@@ -1,4 +1,4 @@
-﻿const fs = require('node:fs');
+const fs = require('node:fs');
 const path = require('node:path');
 const { nativeImage } = require('electron');
 const { id } = require('../defaults.cjs');
@@ -80,15 +80,28 @@ function writeFavorites(store, items) {
   store.write('files.json', items);
 }
 
+function favoriteLabel(filePath, isDirectory) {
+  if (!isDirectory) return path.basename(filePath);
+  const trimmed = filePath.replace(/[\\/]+$/, '');
+  const name = path.basename(trimmed);
+  return name || filePath;
+}
+
 function addFavorite(store, filePath) {
   const items = readFavorites(store);
-  if (items.some((item) => item.path === filePath)) {
+  const normalized = path.resolve(filePath);
+  if (items.some((item) => item.path === normalized)) {
     return items;
   }
+  let isDirectory = false;
+  try {
+    isDirectory = fs.statSync(normalized).isDirectory();
+  } catch (_) {}
   const entry = {
     id: id(),
-    path: filePath,
-    name: path.basename(filePath),
+    path: normalized,
+    name: favoriteLabel(normalized, isDirectory),
+    type: isDirectory ? 'folder' : 'file',
     createdAt: new Date().toISOString()
   };
   items.unshift(entry);

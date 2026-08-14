@@ -1,9 +1,10 @@
-﻿<template>
+<template>
   <div class="view chat-view">
     <header class="chat-header">
       <div class="chat-title">
         <span class="chat-logo"><LineIcon name="chat" :size="22" /></span>
         <div>
+          <p class="view-kicker">WORKSPACE / CHAT</p>
           <h1>对话</h1>
           <p>选择服务后，在工作台内打开对应网页。</p>
         </div>
@@ -71,10 +72,13 @@ const currentUrl = ref('');
 
 const providers = computed(() => {
   const configured = props.settings.chatProviders || {};
+  const qwen = configured.qwen || {};
+  const gpt = configured.gpt || {};
   return [
     { key: 'doubao', label: '豆包', enabled: true, url: 'https://www.doubao.com/chat/', ...(configured.doubao || {}) },
     { key: 'deepseek', label: 'DeepSeek', enabled: true, url: 'https://chat.deepseek.com/', ...(configured.deepseek || {}) },
-    { key: 'gpt', label: 'GPT', enabled: false, url: 'https://chatgpt.com/', ...(configured.gpt || {}) }
+    { key: 'qwen', label: qwen.label || '千问', enabled: true, url: qwen.url || 'https://chat.qwen.ai/' },
+    { key: 'gpt', label: gpt.label || 'GPT', enabled: true, url: gpt.url || 'https://chatgpt.com/' }
   ];
 });
 
