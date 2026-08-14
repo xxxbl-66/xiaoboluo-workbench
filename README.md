@@ -72,8 +72,8 @@
 
 前往 [Releases](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/latest) 下载最新版本：
 
-- **安装包**：`小菠萝的工作台-0.1.2-安装包.exe`
-- **便携版**：`小菠萝的工作台-0.1.2-portable.exe`
+- **安装包**：[Xiaoboluo-Workbench-0.1.2-setup.exe](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.2/Xiaoboluo-Workbench-0.1.2-setup.exe)
+- **便携版**：[Xiaoboluo-Workbench-0.1.2-portable.exe](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.2/Xiaoboluo-Workbench-0.1.2-portable.exe)
 
 便携版无需安装，直接运行即可。安装包支持选择安装目录，并会创建桌面和开始菜单快捷方式。
 
