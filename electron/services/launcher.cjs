@@ -78,7 +78,9 @@ async function runWorkflow(store, workflowId) {
     } else if (step.type === 'file') {
       results.push({ step: step.id, result: await openPath(step.path) });
     } else if (step.type === 'url') {
-      results.push({ step: step.id, result: openExternal(step.url) });
+      // 必须 await：openExternal 是异步的，漏掉 await 会把 Promise 写进结果，
+      // 既让失败检查失效，也会在 IPC 序列化时出错。
+      results.push({ step: step.id, result: await openExternal(step.url) });
     }
     await delay(350);
   }
