@@ -49,9 +49,9 @@ function runStartupMigrations() {
       );
       try {
         dialog.showErrorBox(
-          '数据由更新版本的小菠萝工作台创建',
+          '数据由更新版本的四一四工作台创建',
           `当前版本识别不了这份数据（数据版本 ${result.from}，本程序支持到 ${result.current}）。\n\n` +
-            `请使用更新版本的小菠萝工作台打开。\n\n` +
+            `请使用更新版本的四一四工作台打开。\n\n` +
             `为避免损坏数据，工作台没有做任何修改，你的文件保持原样。\n` +
             `数据目录：${store.baseDir}\n` +
             `备份目录：${store.backupsDir}`
@@ -116,6 +116,8 @@ function runStartupMigrations() {
 }
 
 function configRoot() {
+  // 兼容性约定：这里保留 v0.1.x 时期的历史数据目录名，不做重命名。
+  // 直接改成新名字会让老用户启动后看到空数据，属于不可接受的数据可见性回归。
   return path.join(app.getPath('documents'), '小菠萝的工作台');
 }
 
@@ -1437,7 +1439,7 @@ function registerIpc() {
    * 返回 { shown } 让渲染层知道是否真的弹出，避免悄悄把 reminderFired 置为 true。
    */
   safeHandle('system:notify', (payload) => {
-    const title = String((payload && payload.title) || '小菠萝的工作台');
+    const title = String((payload && payload.title) || '四一四工作台');
     const body = String((payload && payload.body) || '');
     if (!Notification.isSupported()) return { shown: false, reason: 'unsupported' };
     const notification = new Notification({ title, body, silent: false });
@@ -1573,7 +1575,7 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 660,
     backgroundColor: '#f2f2f7',
-    title: '小菠萝的工作台',
+    title: '四一四工作台',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

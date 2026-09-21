@@ -55,7 +55,7 @@ function createPreMigrationBackup(store, fromVersion) {
     target,
     JSON.stringify(
       {
-        app: '小菠萝的工作台',
+        app: '四一四工作台',
         kind: 'migration-backup',
         fromVersion,
         toVersion: CURRENT_SCHEMA_VERSION,

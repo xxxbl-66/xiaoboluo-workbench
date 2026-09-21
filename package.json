@@ -1,9 +1,9 @@
 {
-  "name": "xiaoboluo-workbench",
+  "name": "414-workbench",
   "version": "0.1.2",
-  "description": "小菠萝的工作台 - 本地离线个人工作台",
+  "description": "四一四工作台 - 本地离线个人工作台",
   "main": "electron/main.cjs",
-  "author": "xiaoboluo",
+  "author": "414-workbench",
   "license": "MIT",
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -25,7 +25,7 @@
   },
   "build": {
     "appId": "com.xiaoboluo.workbench",
-    "productName": "小菠萝的工作台",
+    "productName": "四一四工作台",
     "directories": {
       "output": "dist-release/v0.1.2"
     },
@@ -46,11 +46,11 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "小菠萝的工作台",
-      "artifactName": "小菠萝的工作台-${version}-安装包.exe"
+      "shortcutName": "四一四工作台",
+      "artifactName": "四一四工作台-${version}-安装包.exe"
     },
     "portable": {
-      "artifactName": "小菠萝的工作台-${version}-portable.exe"
+      "artifactName": "四一四工作台-${version}-portable.exe"
     }
   }
 }

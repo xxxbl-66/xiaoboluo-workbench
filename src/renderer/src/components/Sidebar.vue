@@ -6,8 +6,8 @@
         <span v-else>{{ user.name ? user.name.slice(0, 1) : '小' }}</span>
       </div>
       <div class="brand-text">
-        <strong>{{ user.name || '小菠萝' }}</strong>
-        <span>的工作台</span>
+        <strong>四一四工作台</strong>
+        <span>{{ user.name }}</span>
       </div>
     </div>
 
@@ -58,15 +58,15 @@ const props = defineProps({
   },
   settings: {
     type: Object,
-    default: () => ({ user: { name: '小菠萝', avatarDataUrl: '' }, navOrder: [] })
+    default: () => ({ user: { name: '用户', avatarDataUrl: '' }, navOrder: [] })
   }
 });
 
 defineEmits(['navigate']);
 
 const checkin = ref({ todayChecked: false, streak: 0, total: 0, dates: [] });
-const settings = ref({ user: { name: '小菠萝', avatarDataUrl: '' }, navOrder: [] });
-const user = ref({ name: '小菠萝', avatarDataUrl: '' });
+const settings = ref({ user: { name: '用户', avatarDataUrl: '' }, navOrder: [] });
+const user = ref({ name: '用户', avatarDataUrl: '' });
 const dragId = ref(null);
 
 watch(
@@ -75,7 +75,7 @@ watch(
     if (!value) return;
     settings.value = value;
     user.value = {
-      name: value.user?.name || '小菠萝',
+      name: value.user?.name || '用户',
       avatarDataUrl: value.user?.avatarDataUrl || ''
     };
   },
@@ -124,7 +124,7 @@ async function loadSidebar() {
     ]);
     checkin.value = checkinData;
     settings.value = settingsData;
-    user.value = { name: settingsData.user?.name || '小菠萝', avatarDataUrl: settingsData.user?.avatarDataUrl || '' };
+    user.value = { name: settingsData.user?.name || '用户', avatarDataUrl: settingsData.user?.avatarDataUrl || '' };
   } catch (_) {}
 }
 

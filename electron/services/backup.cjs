@@ -26,7 +26,7 @@ function exportBackup(store) {
   fs.writeFileSync(
     backupFile,
     JSON.stringify(
-      { app: '小菠萝的工作台', exportedAt: new Date().toISOString(), schemaVersion: migrations.CURRENT_SCHEMA_VERSION, data },
+      { app: '四一四工作台', exportedAt: new Date().toISOString(), schemaVersion: migrations.CURRENT_SCHEMA_VERSION, data },
       null,
       2
     ),
@@ -78,7 +78,7 @@ function createRecoveryPoint(store, snapshot) {
     target,
     JSON.stringify(
       {
-        app: '小菠萝的工作台',
+        app: '四一四工作台',
         kind: 'pre-import-backup',
         exportedAt: new Date().toISOString(),
         data
@@ -178,16 +178,22 @@ function importBackup(store, filePath) {
   if (validated.importedVersion > migrations.CURRENT_SCHEMA_VERSION) {
     return {
       ok: false,
-      error: `备份由更新版本的小菠萝工作台创建（schemaVersion ${validated.importedVersion}），请使用更新版本打开`
+      error: `备份由更新版本的四一四工作台创建（schemaVersion ${validated.importedVersion}），请使用更新版本打开`
     };
   }
 
   const snapshot = snapshotDataDir(store);
-  let recoveryPoint = null;
+  let recoveryPoint;
   try {
     recoveryPoint = createRecoveryPoint(store, snapshot);
-  } catch (_) {
-    recoveryPoint = null;
+  } catch (error) {
+    // 恢复点是破坏性导入的前置条件。这里不能降级为仅依赖内存快照：
+    // 后续写入或回滚若遭遇同一 I/O 故障，会留下无法恢复的新旧表混合状态。
+    return {
+      ok: false,
+      error: `无法创建导入前恢复点，已取消导入：${error.message || String(error)}`,
+      recoveryPoint: null
+    };
   }
 
   try {

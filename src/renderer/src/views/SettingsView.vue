@@ -100,8 +100,8 @@
 
       <section class="panel settings-panel about-panel">
         <h2>关于</h2>
-        <p>小菠萝的工作台</p>
-        <p>版本 {{ info.version || '0.1.0' }} · 本地离线运行</p>
+        <p>四一四工作台</p>
+        <p>个人数字工作台 · 版本 {{ info.version || '0.1.0' }} · 本地离线运行</p>
       </section>
     </div>
   </div>
@@ -119,7 +119,7 @@ const props = defineProps({
 const emit = defineEmits(['settings-updated']);
 
 const info = ref({ version: '', dataDir: '' });
-const userForm = ref({ name: '小菠萝', avatarDataUrl: '' });
+const userForm = ref({ name: '用户', avatarDataUrl: '' });
 
 const builtinTones = [
   { id: 'chime', label: '清脆提示音' },
@@ -158,7 +158,7 @@ async function changeAvatar() {
 async function saveUser() {
   try {
     const nextUser = {
-      name: userForm.value.name.trim() || '小菠萝',
+      name: userForm.value.name.trim() || '用户',
       avatarDataUrl: userForm.value.avatarDataUrl || ''
     };
     userForm.value = { ...nextUser };
@@ -231,7 +231,7 @@ async function importBackup() {
 
 onMounted(async () => {
   userForm.value = {
-    name: props.settings.user?.name || '小菠萝',
+    name: props.settings.user?.name || '用户',
     avatarDataUrl: props.settings.user?.avatarDataUrl || ''
   };
   try {
