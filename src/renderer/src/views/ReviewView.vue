@@ -8,6 +8,35 @@
       </div>
     </header>
 
+    <section class="panel review-work">
+      <div class="panel-head">
+        <div>
+          <h2>今日工作概览</h2>
+          <p>来自工作空间的真实计时记录，不需要手动填写。</p>
+        </div>
+        <div class="review-work-total">
+          <span>今日工作总时长</span>
+          <strong>{{ formatDuration(workSummary.totalSeconds) }}</strong>
+        </div>
+      </div>
+
+      <div v-if="workSummary.byWorkspace.length" class="review-work-list">
+        <article v-for="item in workSummary.byWorkspace" :key="item.workspaceId || 'unassigned'" class="review-work-item">
+          <span class="review-work-dot" :style="{ background: item.color || 'var(--border-strong)' }"></span>
+          <span class="review-work-name">{{ item.name }}</span>
+          <span class="review-work-time">{{ formatDuration(item.seconds) }}</span>
+        </article>
+      </div>
+      <div v-else class="empty-state small">
+        <p>今天还没有工作记录。到「工作空间」开始一次工作，这里就会自动统计。</p>
+      </div>
+
+      <div class="review-work-foot">
+        <span>今日完成 {{ workSummary.completedTodoCount }} 项任务</span>
+        <span v-if="workSummary.activeSessionCount">· 有 {{ workSummary.activeSessionCount }} 次工作还在进行中</span>
+      </div>
+    </section>
+
     <section class="review-metrics">
       <article class="metric-card">
         <span>待办完成度</span>
@@ -77,9 +106,11 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
+import { formatDuration } from '../utils/duration.js';
 
 const todos = ref([]);
 const history = ref([]);
+const workSummary = ref({ totalSeconds: 0, completedTodoCount: 0, activeSessionCount: 0, byWorkspace: [] });
 const record = ref({
   date: '',
   readingMinutes: 0,
@@ -124,6 +155,31 @@ function formatHistoryTime(value) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
+async function loadWorkSummary() {
+  try {
+    const [summary, workspaces] = await Promise.all([
+      workbench.sessions.summary({ dateKey }),
+      workbench.workspaces.list({ includeArchived: true, withStats: false })
+    ]);
+    const nameById = new Map(workspaces.map((item) => [item.id, item]));
+    workSummary.value = {
+      ...summary,
+      byWorkspace: (summary.byWorkspace || [])
+        .map((bucket) => {
+          const workspace = bucket.workspaceId ? nameById.get(bucket.workspaceId) : null;
+          return {
+            ...bucket,
+            name: workspace ? workspace.name : '未归类的工作',
+            color: workspace ? workspace.color : ''
+          };
+        })
+        .sort((left, right) => right.seconds - left.seconds)
+    };
+  } catch (_) {
+    workSummary.value = { totalSeconds: 0, completedTodoCount: 0, activeSessionCount: 0, byWorkspace: [] };
+  }
+}
+
 async function loadData() {
   const [todoList, review, reviewHistory] = await Promise.all([
     workbench.todos.list(),
@@ -133,6 +189,7 @@ async function loadData() {
   todos.value = todoList;
   ensureRecord(review);
   history.value = reviewHistory;
+  await loadWorkSummary();
 }
 
 function scheduleSave() {
@@ -182,6 +239,79 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.review-work {
+  margin-bottom: 18px;
+}
+
+.review-work-total {
+  text-align: right;
+  flex: 0 0 auto;
+}
+
+.review-work-total span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+
+.review-work-total strong {
+  font-size: 22px;
+  color: var(--text);
+}
+
+.review-work-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-work-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface-muted);
+}
+
+.review-work-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.review-work-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-work-time {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.review-work-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .review-save-button {
   width: 100%;
   margin-top: 6px;
