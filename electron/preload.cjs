@@ -38,7 +38,9 @@ const api = {
     openDataDir: () => invoke('system:open-data-dir'),
     changeDataDir: () => invoke('settings:change-data-dir'),
     openLogsDir: () => invoke('system:open-logs-dir'),
-    openExternal: (url) => invoke('system:open-external', url)
+    openExternal: (url) => invoke('system:open-external', url),
+    pathExists: (targetPath) => invoke('system:path-exists', targetPath),
+    pathExistsBatch: (paths) => invoke('system:path-exists-batch', paths)
   },
   apps: {
     list: () => invoke('apps:list'),
@@ -78,7 +80,7 @@ const api = {
     reveal: (filePath) => invoke('files:reveal', filePath),
     favorites: {
       list: () => invoke('files:favorites:list'),
-      add: (filePath) => invoke('files:favorites:add', filePath),
+      add: (filePath, workspaceId) => invoke('files:favorites:add', filePath, workspaceId),
       remove: (entryId) => invoke('files:favorites:remove', entryId)
     },
     images: {
@@ -156,6 +158,27 @@ const api = {
   reader: {
     get: () => invoke('reader:get'),
     update: (patch) => invoke('reader:update', patch)
+  },
+  workspaces: {
+    list: (options) => invoke('workspaces:list', options),
+    recent: (limit) => invoke('workspaces:recent', limit),
+    get: (workspaceId) => invoke('workspaces:get', workspaceId),
+    create: (input) => invoke('workspaces:create', input),
+    update: (workspaceId, patch) => invoke('workspaces:update', workspaceId, patch),
+    archive: (workspaceId, archived) => invoke('workspaces:archive', workspaceId, archived),
+    reorder: (orderedIds) => invoke('workspaces:reorder', orderedIds),
+    touch: (workspaceId) => invoke('workspaces:touch', workspaceId),
+    linkResource: (payload) => invoke('workspaces:link-resource', payload)
+  },
+  sessions: {
+    list: (options) => invoke('sessions:list', options),
+    getActive: () => invoke('sessions:get-active'),
+    start: (workspaceId) => invoke('sessions:start', workspaceId),
+    end: (sessionId, patch) => invoke('sessions:end', sessionId, patch),
+    update: (sessionId, patch) => invoke('sessions:update', sessionId, patch),
+    remove: (sessionId) => invoke('sessions:delete', sessionId),
+    summary: (options) => invoke('sessions:summary', options),
+    last: (workspaceId) => invoke('sessions:last', workspaceId)
   }
 };
 

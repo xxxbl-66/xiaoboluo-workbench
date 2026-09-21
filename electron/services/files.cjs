@@ -87,10 +87,23 @@ function favoriteLabel(filePath, isDirectory) {
   return name || filePath;
 }
 
-function addFavorite(store, filePath) {
+function normalizeScope(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
+/**
+ * 收藏文件/文件夹。
+ * 去重作用域是 path + workspaceId：
+ * 同一路径可以在不同 Workspace 中分别收藏，但同一作用域内不允许重复。
+ * null 与具体 workspaceId 视为不同作用域。
+ */
+function addFavorite(store, filePath, workspaceId) {
   const items = readFavorites(store);
   const normalized = path.resolve(filePath);
-  if (items.some((item) => item.path === normalized)) {
+  const scope = normalizeScope(workspaceId);
+  if (items.some((item) => item.path === normalized && normalizeScope(item.workspaceId) === scope)) {
     return items;
   }
   let isDirectory = false;
@@ -102,6 +115,7 @@ function addFavorite(store, filePath) {
     path: normalized,
     name: favoriteLabel(normalized, isDirectory),
     type: isDirectory ? 'folder' : 'file',
+    workspaceId: scope,
     createdAt: new Date().toISOString()
   };
   items.unshift(entry);
@@ -203,9 +217,11 @@ function addNote(store, note) {
     title: note.title || '无标题便签',
     content: note.content || '',
     pinned: Boolean(note.pinned),
+    workspaceId: normalizeScope(note.workspaceId),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+  if (note.type) entry.type = note.type;
   items.unshift(entry);
   writeNotes(store, items);
   return entry;
@@ -233,6 +249,7 @@ function deleteNote(store, noteId) {
 module.exports = {
   listDrives,
   browseDirectory,
+  normalizeScope,
   readFavorites,
   addFavorite,
   removeFavorite,

@@ -8,6 +8,10 @@ const fileService = require('./services/files.cjs');
 const launcherService = require('./services/launcher.cjs');
 const backupService = require('./services/backup.cjs');
 const migrations = require('./migrations.cjs');
+const workspaceService = require('./services/workspaces.cjs');
+const sessionService = require('./services/sessions.cjs');
+const overviewService = require('./services/overview.cjs');
+const { todayKey: localTodayKey } = require('./dates.cjs');
 
 let mainWindow = null;
 let store = null;
@@ -161,11 +165,9 @@ function saveQuickNote(content) {
   return quick;
 }
 
+/** 本地日期键；实现集中在 electron/dates.cjs，避免时区处理散落多处 */
 function todayKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return localTodayKey(date);
 }
 
 function readCheckins() {
@@ -282,6 +284,18 @@ function syncGoalRecurringTasks() {
     desiredTodos.set(key, existing || null);
   }
 
+  // 生成的待办必须继承其目标的 workspaceId；目标被移动到别的 Workspace 时要跟着走。
+  // 注意：手动创建的待办（非 generated）不会被这里改写，workspaceId 也不会丢失。
+  for (const goal of goals) {
+    const goalWorkspaceId = workspaceService.normalizeWorkspaceId(goal.workspaceId);
+    for (const todo of todos) {
+      if (!todo.generated || todo.sourceGoalId !== goal.id) continue;
+      if (workspaceService.normalizeWorkspaceId(todo.workspaceId) === goalWorkspaceId) continue;
+      todo.workspaceId = goalWorkspaceId;
+      todo.updatedAt = new Date().toISOString();
+    }
+  }
+
   const nextTodos = todos.filter((todo) => {
     if (!todo.generated || !todo.sourceGoalId) return true;
     return desiredTodos.has(`${todo.sourceGoalId}:${todo.sourceDate}`);
@@ -306,6 +320,8 @@ function syncGoalRecurringTasks() {
       generated: true,
       sourceGoalId: goalId,
       sourceDate,
+      // 继承长期目标的归属，保证 Workspace 内能看到自动生成的任务
+      workspaceId: workspaceService.normalizeWorkspaceId(goal.workspaceId),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
@@ -745,6 +761,10 @@ function registerIpc() {
     if (!entry) throw new Error('应用不存在');
     if (typeof patch.name === 'string' && patch.name.trim()) entry.name = patch.name.trim();
     if (typeof patch.groupId === 'string') entry.groupId = patch.groupId;
+    // workspaceId 与 groupId 是两个独立维度，互不影响
+    if (patch.workspaceId !== undefined) {
+      entry.workspaceId = workspaceService.normalizeWorkspaceId(patch.workspaceId);
+    }
     store.write('apps.json', apps);
     return appService.hydrateApp(store, entry);
   });
@@ -801,6 +821,7 @@ function registerIpc() {
       recurrence: goal.recurrence || { type: 'none', days: [] },
       recurrenceTask: goal.recurrenceTask || goal.title || '',
       completedDates: [],
+      workspaceId: workspaceService.normalizeWorkspaceId(goal.workspaceId),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -865,6 +886,7 @@ function registerIpc() {
       reminderFired: false,
       completed: false,
       sort: Date.now(),
+      workspaceId: workspaceService.normalizeWorkspaceId(todo.workspaceId),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -913,7 +935,9 @@ function registerIpc() {
   safeHandle('files:open', (filePath) => launcherService.openPath(filePath));
   safeHandle('files:reveal', (filePath) => launcherService.revealPath(filePath));
   safeHandle('files:favorites:list', () => fileService.readFavorites(store));
-  safeHandle('files:favorites:add', (filePath) => fileService.addFavorite(store, filePath));
+  safeHandle('files:favorites:add', (filePath, workspaceId) => (
+    fileService.addFavorite(store, filePath, workspaceId)
+  ));
   safeHandle('files:favorites:remove', (entryId) => fileService.removeFavorite(store, entryId));
   safeHandle('files:images:list', () => fileService.readImages(store).map((item) => fileService.hydrateImage(store, item)));
   safeHandle('files:images:add', (filePath) => fileService.addImage(store, filePath));
@@ -1003,6 +1027,7 @@ function registerIpc() {
       url: bookmark.url || '',
       title: bookmark.title || '',
       note: bookmark.note || '',
+      workspaceId: workspaceService.normalizeWorkspaceId(bookmark.workspaceId),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -1203,6 +1228,220 @@ function registerIpc() {
     if (result.canceled || !result.filePaths.length) return { canceled: true };
     return backupService.importBackup(store, result.filePaths[0]);
   });
+
+  /* ---------------------------------------------------------------
+   * Workspace（工作空间）
+   * ------------------------------------------------------------- */
+
+  safeHandle('workspaces:list', (options) => {
+    const opts = options || {};
+    if (opts.withStats === false) {
+      return workspaceService.listWorkspaces(store, { includeArchived: Boolean(opts.includeArchived) });
+    }
+    return overviewService.listWorkspaceOverview(store, readTodos(), {
+      includeArchived: Boolean(opts.includeArchived)
+    });
+  });
+
+  safeHandle('workspaces:recent', (limit) => overviewService.recentWorkspaces(store, readTodos(), limit || 3));
+
+  safeHandle('workspaces:get', (workspaceId) => {
+    const overview = overviewService.listWorkspaceOverview(store, readTodos(), { includeArchived: true });
+    return overview.find((item) => item.id === workspaceId) || null;
+  });
+
+  safeHandle('workspaces:create', (input) => workspaceService.createWorkspace(store, input || {}));
+
+  safeHandle('workspaces:update', (workspaceId, patch) => (
+    workspaceService.updateWorkspace(store, workspaceId, patch || {})
+  ));
+
+  safeHandle('workspaces:archive', (workspaceId, archived) => (
+    workspaceService.archiveWorkspace(store, workspaceId, archived !== false)
+  ));
+
+  safeHandle('workspaces:reorder', (orderedIds) => workspaceService.reorderWorkspaces(store, orderedIds));
+
+  safeHandle('workspaces:touch', (workspaceId) => workspaceService.touchWorkspace(store, workspaceId));
+
+  // 内部能力：普通 UI 不暴露，只解绑关联数据、不删除关联数据本身。
+  safeHandle('workspaces:delete', (workspaceId, options) => {
+    if (!options || options.unlinkResources !== true) {
+      throw new Error('出于数据安全考虑，工作空间默认只支持归档');
+    }
+    const result = workspaceService.deleteWorkspace(store, workspaceId);
+    const detached = detachWorkspaceResources(workspaceId);
+    return { ...result, detached };
+  });
+
+  /* ---------------------------------------------------------------
+   * Work Session（工作会话）
+   * ------------------------------------------------------------- */
+
+  safeHandle('sessions:list', (options) => sessionService.listSessions(store, options || {}));
+  safeHandle('sessions:get-active', () => sessionService.getActiveSession(store));
+  safeHandle('sessions:start', (workspaceId) => sessionService.startSession(store, workspaceId));
+  safeHandle('sessions:end', (sessionId, patch) => sessionService.endSession(store, sessionId, patch || {}));
+  safeHandle('sessions:update', (sessionId, patch) => sessionService.updateSession(store, sessionId, patch || {}));
+  safeHandle('sessions:delete', (sessionId) => sessionService.deleteSession(store, sessionId));
+  safeHandle('sessions:summary', (options) => sessionService.summarizeSessions(store, options || {}));
+
+  /** 某个 Workspace 最近一次已结束的会话（"继续上次工作"快照的数据来源） */
+  safeHandle('sessions:last', (workspaceId) => {
+    const session = sessionService.lastFinishedSession(store, workspaceId);
+    if (!session) return null;
+    const todos = readTodos();
+    const completed = new Set(Array.isArray(session.completedTodoIds) ? session.completedTodoIds : []);
+    return {
+      ...session,
+      completedTodos: todos.filter((todo) => completed.has(todo.id)),
+      remainingTodos: todos.filter((todo) => (
+        workspaceService.normalizeWorkspaceId(todo.workspaceId) === workspaceService.normalizeWorkspaceId(workspaceId)
+        && todo.completed !== true
+      ))
+    };
+  });
+
+  /* ---------------------------------------------------------------
+   * 资源关联辅助能力
+   * ------------------------------------------------------------- */
+
+  safeHandle('system:path-exists', (targetPath) => {
+    if (!targetPath || typeof targetPath !== 'string') return false;
+    try {
+      return fs.existsSync(targetPath);
+    } catch (_) {
+      return false;
+    }
+  });
+
+  // 批量预检：Workspace 中一次性判断多个应用/文件路径是否仍然存在
+  safeHandle('system:path-exists-batch', (paths) => {
+    const result = {};
+    if (!Array.isArray(paths)) return result;
+    for (const item of paths) {
+      if (!item || typeof item !== 'string') continue;
+      try {
+        result[item] = fs.existsSync(item);
+      } catch (_) {
+        result[item] = false;
+      }
+    }
+    return result;
+  });
+
+  safeHandle('workspaces:link-resource', (payload) => linkResource(payload || {}));
+}
+
+/**
+ * 把一条已有资源关联到 Workspace（只更新外键，不复制资源）。
+ * kind: 'todo' | 'goal' | 'note' | 'bookmark' | 'app' | 'favorite'
+ */
+function linkResource(payload) {
+  const kind = String(payload.kind || '');
+  const resourceId = String(payload.id || '');
+  const workspaceId = workspaceService.normalizeWorkspaceId(payload.workspaceId);
+  if (!kind || !resourceId) throw new Error('缺少资源信息');
+
+  if (workspaceId) {
+    const exists = workspaceService.findWorkspace(store, workspaceId);
+    if (!exists) throw new Error('工作空间不存在');
+  }
+
+  const now = new Date().toISOString();
+
+  if (kind === 'todo') {
+    const items = readTodos();
+    const index = items.findIndex((item) => item.id === resourceId);
+    if (index === -1) throw new Error('待办不存在');
+    items[index] = { ...items[index], workspaceId, updatedAt: now };
+    writeTodos(items);
+    return items[index];
+  }
+
+  if (kind === 'goal') {
+    const items = readGoals();
+    const index = items.findIndex((item) => item.id === resourceId);
+    if (index === -1) throw new Error('目标不存在');
+    items[index] = { ...items[index], workspaceId, updatedAt: now };
+    writeGoals(items);
+    return items[index];
+  }
+
+  if (kind === 'bookmark') {
+    const items = readBookmarks();
+    const index = items.findIndex((item) => item.id === resourceId);
+    if (index === -1) throw new Error('收藏不存在');
+    items[index] = { ...items[index], workspaceId, updatedAt: now };
+    writeBookmarks(items);
+    return items[index];
+  }
+
+  if (kind === 'note') {
+    const items = fileService.readNotes(store);
+    const index = items.findIndex((item) => item.id === resourceId);
+    if (index === -1) throw new Error('便签不存在');
+    items[index] = { ...items[index], workspaceId, updatedAt: now };
+    fileService.writeNotes(store, items);
+    return items[index];
+  }
+
+  if (kind === 'app') {
+    const items = appService.readApps(store);
+    const index = items.findIndex((item) => item.id === resourceId);
+    if (index === -1) throw new Error('应用不存在');
+    items[index] = { ...items[index], workspaceId };
+    store.write('apps.json', items);
+    return appService.hydrateApp(store, items[index]);
+  }
+
+  if (kind === 'favorite') {
+    const items = fileService.readFavorites(store);
+    const index = items.findIndex((item) => item.id === resourceId);
+    if (index === -1) throw new Error('收藏的文件不存在');
+    items[index] = { ...items[index], workspaceId };
+    fileService.writeFavorites(store, items);
+    return items[index];
+  }
+
+  throw new Error(`不支持的资源类型：${kind}`);
+}
+
+/** 仅在工作空间被物理删除时调用：把关联资源解绑回"未归类" */
+function detachWorkspaceResources(workspaceId) {
+  const target = workspaceService.normalizeWorkspaceId(workspaceId);
+  if (!target) return 0;
+  let count = 0;
+
+  const tables = [
+    { read: readTodos, write: writeTodos },
+    { read: readGoals, write: writeGoals },
+    { read: readBookmarks, write: writeBookmarks },
+    { read: () => fileService.readNotes(store), write: (items) => fileService.writeNotes(store, items) },
+    { read: () => appService.readApps(store), write: (items) => store.write('apps.json', items) }
+  ];
+
+  for (const table of tables) {
+    const items = table.read();
+    let changed = false;
+    for (const item of items) {
+      if (workspaceService.normalizeWorkspaceId(item.workspaceId) !== target) continue;
+      item.workspaceId = null;
+      changed = true;
+      count += 1;
+    }
+    if (changed) table.write(items);
+  }
+
+  // 文件收藏是按 path + workspaceId 分作用域存储的，物理解绑时移除该作用域的记录
+  const favorites = fileService.readFavorites(store);
+  const keptFavorites = favorites.filter(
+    (item) => workspaceService.normalizeWorkspaceId(item.workspaceId) !== target
+  );
+  count += favorites.length - keptFavorites.length;
+  if (keptFavorites.length !== favorites.length) fileService.writeFavorites(store, keptFavorites);
+
+  return count;
 }
 
 function createWindow() {

@@ -1,0 +1,420 @@
+/**
+ * IPC 冒烟测试：用最小的 electron mock 加载真实的 electron/main.cjs，
+ * 直接调用注册好的 ipcMain.handle 回调，验证"渲染层 → preload → IPC → 服务层 → DataStore"整条链路。
+ *
+ * 这里不启动任何窗口，也不会碰到用户的真实数据目录。
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const Module = require('node:module');
+
+const ROOT = path.join(__dirname, '..');
+const MAIN_PATH = path.join(ROOT, 'electron', 'main.cjs');
+
+function createElectronMock(workRoot) {
+  const handlers = new Map();
+  const documents = path.join(workRoot, 'documents');
+  fs.mkdirSync(documents, { recursive: true });
+
+  const app = {
+    isPackaged: false,
+    getVersion: () => '0.0.0-test',
+    getPath: (name) => (name === 'documents' ? documents : workRoot),
+    getAppPath: () => ROOT,
+    setLoginItemSettings: () => {},
+    relaunch: () => {},
+    exit: () => {},
+    quit: () => {},
+    on: () => {},
+    whenReady: () => Promise.resolve()
+  };
+
+  class BrowserWindow {
+    constructor() {
+      this.webContents = {
+        on: () => {},
+        setWindowOpenHandler: () => {},
+        send: () => {}
+      };
+    }
+    loadURL() {}
+    loadFile() {}
+    isDestroyed() {
+      return false;
+    }
+    on() {}
+    static getAllWindows() {
+      return [];
+    }
+  }
+
+  return {
+    app,
+    BrowserWindow,
+    ipcMain: {
+      handle: (channel, fn) => handlers.set(channel, fn),
+      on: () => {}
+    },
+    dialog: {
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      showErrorBox: () => {}
+    },
+    shell: {
+      openPath: async () => '',
+      showItemInFolder: () => {},
+      openExternal: () => Promise.resolve()
+    },
+    session: {
+      fromPartition: () => ({ on: () => {} })
+    },
+    nativeImage: {
+      createFromPath: () => ({
+        isEmpty: () => true,
+        resize: () => ({ toPNG: () => Buffer.alloc(0), toDataURL: () => '' })
+      })
+    },
+    __handlers: handlers,
+    __documents: documents
+  };
+}
+
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 30));
+}
+
+/**
+ * 在受控的 electron mock 下加载 main.cjs，返回 ipcMain 的 handler 表。
+ *
+ * 注意：main.cjs 通过 app.whenReady().then(...) 启动，回调是微任务，会在 require()
+ * 返回之后才执行。所以 setInterval 的桩必须一直保留到微任务跑完，否则真正的
+ * "每小时同步长期目标" 定时器会被创建，node:test 进程永远无法退出。
+ */
+const capturedIntervals = [];
+
+async function loadMainWithMock() {
+  const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'xb-ipc-'));
+  const electronMock = createElectronMock(workRoot);
+
+  const originalLoad = Module._load;
+  const originalSetInterval = globalThis.setInterval;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === 'electron') return electronMock;
+    return originalLoad.apply(this, arguments);
+  };
+  globalThis.setInterval = function stubSetInterval(fn, ms, ...rest) {
+    capturedIntervals.push({ fn, ms });
+    return { fake: true, unref: () => {}, ref: () => {} };
+  };
+
+  for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(ROOT) && !key.includes('node_modules')) delete require.cache[key];
+  }
+
+  try {
+    require(MAIN_PATH);
+    await settle();
+  } finally {
+    Module._load = originalLoad;
+    globalThis.setInterval = originalSetInterval;
+  }
+
+  return { electronMock, workRoot };
+}
+
+/** 模拟 preload 的 invoke：解包 {ok,data} / {ok:false,error} */
+function makeInvoke(handlers) {
+  return async (channel, ...args) => {
+    const handler = handlers.get(channel);
+    if (!handler) throw new Error(`未注册的 IPC 通道：${channel}`);
+    const result = await handler({}, ...args);
+    if (!result || result.ok === false) {
+      throw new Error((result && result.error) || '操作失败');
+    }
+    return result.data;
+  };
+}
+
+function cleanupDir(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (_) {}
+}
+
+test('IPC 冒烟：main.cjs 在 mock 环境下能注册全部 Workspace / Session 通道', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const handlers = electronMock.__handlers;
+    const required = [
+      'workspaces:list',
+      'workspaces:get',
+      'workspaces:create',
+      'workspaces:update',
+      'workspaces:archive',
+      'workspaces:reorder',
+      'workspaces:touch',
+      'workspaces:recent',
+      'workspaces:link-resource',
+      'sessions:list',
+      'sessions:get-active',
+      'sessions:start',
+      'sessions:end',
+      'sessions:update',
+      'sessions:summary',
+      'sessions:last',
+      'system:path-exists',
+      'system:path-exists-batch'
+    ];
+    for (const channel of required) {
+      assert.ok(handlers.has(channel), `缺少 IPC 通道 ${channel}`);
+    }
+    for (const channel of ['todos:list', 'goals:list', 'apps:list', 'files:favorites:list', 'workflows:list', 'backup:export']) {
+      assert.ok(handlers.has(channel), `原有 IPC 通道丢失：${channel}`);
+    }
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：创建 → 修改 → 归档 → 开始/结束会话 全链路可用', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+
+    const list0 = await invoke('workspaces:list');
+    assert.deepEqual(list0, []);
+
+    const ws = await invoke('workspaces:create', { name: '程序设计大赛', description: '比赛项目' });
+    assert.equal(ws.name, '程序设计大赛');
+
+    const listed = await invoke('workspaces:list');
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].pendingTodoCount, 0);
+    assert.equal(listed[0].totalSeconds, 0);
+
+    await invoke('workspaces:touch', ws.id);
+    const touched = await invoke('workspaces:list');
+    assert.ok(touched[0].lastOpenedAt);
+
+    const todo = await invoke('todos:create', { title: '登录接口', workspaceId: ws.id });
+    assert.equal(todo.workspaceId, ws.id, 'todos:create 必须保留 workspaceId');
+    const todo2 = await invoke('todos:create', { title: '未归类任务' });
+    assert.equal(todo2.workspaceId, null);
+
+    const withTodo = await invoke('workspaces:list');
+    assert.equal(withTodo[0].pendingTodoCount, 1);
+
+    const started = await invoke('sessions:start', ws.id);
+    assert.equal(started.started, true);
+
+    const active = await invoke('sessions:get-active');
+    assert.equal(active.id, started.session.id);
+
+    const blocked = await invoke('sessions:start', ws.id);
+    assert.equal(blocked.started, false);
+    assert.equal(blocked.reason, 'active-exists');
+
+    const ended = await invoke('sessions:end', started.session.id, {
+      note: '登录接口基本完成',
+      nextStep: '完成 Token 刷新与权限测试',
+      completedTodoIds: [todo.id]
+    });
+    assert.ok(ended.endedAt);
+    assert.equal(ended.note, '登录接口基本完成');
+
+    const last = await invoke('sessions:last', ws.id);
+    assert.equal(last.id, ended.id);
+    assert.equal(last.completedTodos.length, 1);
+    assert.equal(last.remainingTodos.length, 1);
+
+    await invoke('workspaces:archive', ws.id);
+    assert.deepEqual(await invoke('workspaces:list'), []);
+    const archived = await invoke('workspaces:list', { includeArchived: true });
+    assert.equal(archived.length, 1);
+    assert.equal(archived[0].archived, true);
+
+    // 归档后关联数据与历史会话必须完整保留
+    const todosAfter = await invoke('todos:list');
+    assert.equal(todosAfter.length, 2);
+    assert.equal(todosAfter.find((item) => item.id === todo.id).workspaceId, ws.id);
+    const sessionsAfter = await invoke('sessions:list', { workspaceId: ws.id });
+    assert.equal(sessionsAfter.length, 1);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：未归类（workspaceId: null）与具体 Workspace 是不同作用域', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const wsA = await invoke('workspaces:create', { name: 'A' });
+    const wsB = await invoke('workspaces:create', { name: 'B' });
+
+    const goal = await invoke('goals:create', { title: '每日算法', workspaceId: wsA.id });
+    assert.equal(goal.workspaceId, wsA.id);
+
+    const bookmark = await invoke('bookmarks:create', { title: '文章', workspaceId: wsB.id });
+    assert.equal(bookmark.workspaceId, wsB.id);
+    const loose = await invoke('bookmarks:create', { title: '未归类文章' });
+    assert.equal(loose.workspaceId, null);
+
+    const note = await invoke('files:notes:create', { title: '便签', content: '', workspaceId: wsA.id });
+    assert.equal(note.workspaceId, wsA.id);
+
+    // 文件收藏：同一路径可以在两个 Workspace 中分别收藏，但同一作用域内不允许重复
+    const target = path.join(workRoot, 'BugLens');
+    fs.mkdirSync(target, { recursive: true });
+    const fav1 = await invoke('files:favorites:add', target, wsA.id);
+    assert.equal(fav1.length, 1);
+    const fav2 = await invoke('files:favorites:add', target, wsA.id);
+    assert.equal(fav2.length, 1, '同一 workspaceId 内重复添加应被拒绝');
+    const fav3 = await invoke('files:favorites:add', target, wsB.id);
+    assert.equal(fav3.length, 2, '不同 Workspace 可以收藏同一路径');
+    const fav4 = await invoke('files:favorites:add', target);
+    assert.equal(fav4.length, 3, 'null 是独立作用域');
+
+    const moved = await invoke('workspaces:link-resource', { kind: 'goal', id: goal.id, workspaceId: wsB.id });
+    assert.equal(moved.workspaceId, wsB.id);
+
+    const detached = await invoke('workspaces:link-resource', { kind: 'bookmark', id: loose.id, workspaceId: null });
+    assert.equal(detached.workspaceId, null);
+
+    await assert.rejects(
+      () => invoke('workspaces:link-resource', { kind: 'goal', id: goal.id, workspaceId: 'not-exist' }),
+      /工作空间不存在/
+    );
+    await assert.rejects(
+      () => invoke('workspaces:link-resource', { kind: 'unknown', id: 'x', workspaceId: wsA.id }),
+      /不支持的资源类型/
+    );
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：App 的 workspaceId 与 groupId 互不影响', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const ws = await invoke('workspaces:create', { name: '程序设计大赛' });
+
+    const exe = path.join(workRoot, 'vscode.exe');
+    fs.writeFileSync(exe, 'stub', 'utf8');
+    const added = await invoke('apps:add', exe, { name: 'VS Code', groupId: '开发工具', workspaceId: ws.id });
+
+    assert.equal(added.workspaceId, ws.id);
+    assert.equal(added.groupId, '开发工具');
+    assert.equal(added.launchCount, 0);
+
+    const updated = await invoke('apps:update', added.id, { workspaceId: null });
+    assert.equal(updated.workspaceId, null);
+    assert.equal(updated.groupId, '开发工具', '清除 workspaceId 不应影响 groupId');
+
+    const back = await invoke('apps:update', added.id, { groupId: '其他工具' });
+    assert.equal(back.groupId, '其他工具');
+    assert.equal(back.workspaceId, null);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：workspaces:delete 默认被拒绝（只允许归档）', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const ws = await invoke('workspaces:create', { name: 'A' });
+    await assert.rejects(() => invoke('workspaces:delete', ws.id), /只支持归档/);
+    assert.equal((await invoke('workspaces:list')).length, 1);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：path-exists 返回 boolean 而不是抛错', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const existing = path.join(workRoot, 'exists.txt');
+    fs.writeFileSync(existing, 'x', 'utf8');
+
+    assert.equal(await invoke('system:path-exists', existing), true);
+    assert.equal(await invoke('system:path-exists', path.join(workRoot, 'nope.txt')), false);
+    assert.equal(await invoke('system:path-exists', ''), false);
+    assert.equal(await invoke('system:path-exists', null), false);
+
+    const batch = await invoke('system:path-exists-batch', [existing, path.join(workRoot, 'nope.txt')]);
+    assert.equal(batch[existing], true);
+    assert.equal(batch[path.join(workRoot, 'nope.txt')], false);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：旧数据没有 workspaceId 时，原有列表通道仍然正常', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+
+    // 直接写入"迁移前"形态的旧数据（完全没有 workspaceId 字段）
+    const dataDir = path.join(electronMock.__documents, '小菠萝的工作台', 'data');
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'todos.json'), JSON.stringify([
+      { id: 'legacy-1', title: '旧待办', priority: 'medium', completed: false, sort: 1 },
+      { id: 'legacy-2', title: '旧待办 2', priority: 'low', completed: true, sort: 2 }
+    ]), 'utf8');
+    fs.writeFileSync(path.join(dataDir, 'bookmarks.json'), JSON.stringify([
+      { id: 'b-legacy', type: 'article', url: 'https://a.com', title: '旧收藏', note: '' }
+    ]), 'utf8');
+
+    const todos = await invoke('todos:list');
+    assert.equal(todos.length, 2);
+    assert.equal(todos[0].workspaceId, undefined, '读路径本身不应改写数据');
+
+    const bookmarks = await invoke('bookmarks:list');
+    assert.equal(bookmarks.length, 1);
+
+    const ws = await invoke('workspaces:create', { name: '新空间' });
+    const overview = await invoke('workspaces:list');
+    assert.equal(overview.length, 1);
+    assert.equal(overview[0].id, ws.id);
+    assert.equal(overview[0].pendingTodoCount, 0, '未归类旧数据不应被算进新空间');
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：长期目标生成的待办继承 workspaceId，手动待办不受同步算法影响', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const ws = await invoke('workspaces:create', { name: '程序设计大赛' });
+
+    const goal = await invoke('goals:create', { title: '刷题目标', workspaceId: ws.id });
+    await invoke('goals:update', goal.id, {
+      recurrence: { type: 'daily', days: [] },
+      recurrenceTask: '每日一题'
+    });
+
+    const todos = await invoke('todos:list');
+    const generated = todos.filter((item) => item.generated && item.sourceGoalId === goal.id);
+    assert.ok(generated.length > 0, '应生成至少一条周期待办');
+    for (const item of generated) {
+      assert.equal(item.workspaceId, ws.id, '自动生成的待办必须继承目标的 workspaceId');
+    }
+
+    // 手动待办：同步算法不得清掉它的 workspaceId
+    const manual = await invoke('todos:create', { title: '手动任务', workspaceId: ws.id });
+    await invoke('goals:update', goal.id, { recurrenceTask: '每日一题（改）' });
+    const after = await invoke('todos:list');
+    assert.equal(
+      after.find((item) => item.id === manual.id).workspaceId,
+      ws.id,
+      '手动待办的 workspaceId 不能被同步算法清掉'
+    );
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
