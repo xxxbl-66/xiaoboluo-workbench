@@ -32,6 +32,34 @@ let migrationState = { schemaVersion: 0, ranAt: null, error: null, repaired: [],
 function runStartupMigrations() {
   try {
     const result = migrations.runMigrations(store);
+
+    // 数据由更新版本创建：当前程序既不能迁移也不能降级，
+    // 必须原样保留数据并停止启动，绝不进入会写数据的普通链路。
+    if (result.futureSchema) {
+      migrationState = {
+        schemaVersion: result.from,
+        ranAt: new Date().toISOString(),
+        error: 'UNSUPPORTED_FUTURE_SCHEMA',
+        repaired: [],
+        fatal: true,
+        futureSchema: true
+      };
+      console.error(
+        `[migration] 数据由更新版本创建（schemaVersion ${result.from} > ${result.current}），已停止启动`
+      );
+      try {
+        dialog.showErrorBox(
+          '数据由更新版本的小菠萝工作台创建',
+          `当前版本识别不了这份数据（数据版本 ${result.from}，本程序支持到 ${result.current}）。\n\n` +
+            `请使用更新版本的小菠萝工作台打开。\n\n` +
+            `为避免损坏数据，工作台没有做任何修改，你的文件保持原样。\n` +
+            `数据目录：${store.baseDir}\n` +
+            `备份目录：${store.backupsDir}`
+        );
+      } catch (_) {}
+      return migrationState;
+    }
+
     migrationState = {
       schemaVersion: result.to,
       ranAt: new Date().toISOString(),

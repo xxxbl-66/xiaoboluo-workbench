@@ -174,17 +174,38 @@ const MIGRATIONS = [{ version: 1, name: 'add-workspace-id', run: migrateToV1 }];
  * @returns {{from:number,to:number,applied:string[],touched:string[],backupPath:string|null,skipped:boolean}}
  */
 function runMigrations(store, options = {}) {
-  // 先做结构校验与安全修复，保证后续任何读路径都不会拿到根类型错误的表。
-  // 这一步只能抛错（不可恢复），绝不"跳过 + 标记成功"。
-  const repaired = options.skipRepair ? [] : ensureTableRoots(store);
-
-  const from = readMeta(store).schemaVersion;
   const targetVersion = Number.isFinite(options.targetVersion)
     ? Math.floor(options.targetVersion)
     : CURRENT_SCHEMA_VERSION;
+
+  // 先读版本，再做任何写入。
+  // 数据由更新版本创建时，当前程序既不能迁移、也不能降级、更不能覆盖 meta，
+  // 必须把整个数据目录原样留给更新版本处理。
+  const from = readMeta(store).schemaVersion;
+  if (from > targetVersion) {
+    return {
+      ok: false,
+      reason: 'UNSUPPORTED_FUTURE_SCHEMA',
+      from,
+      to: from,
+      current: targetVersion,
+      applied: [],
+      touched: [],
+      repaired: [],
+      backupPath: null,
+      skipped: true,
+      futureSchema: true
+    };
+  }
+
+  // 结构校验与安全修复，保证后续任何读路径都不会拿到根类型错误的表。
+  // 这一步只能抛错（不可恢复），绝不"跳过 + 标记成功"。
+  const repaired = options.skipRepair ? [] : ensureTableRoots(store);
+
   const plan = Array.isArray(options.migrations) ? options.migrations : MIGRATIONS;
   if (from >= targetVersion) {
     return {
+      ok: true,
       from,
       to: from,
       applied: [],
@@ -218,6 +239,7 @@ function runMigrations(store, options = {}) {
   writeMeta(store, targetVersion);
 
   return {
+    ok: true,
     from,
     to: targetVersion,
     applied,
