@@ -272,6 +272,12 @@ function syncGoalRecurringTasks() {
   const todayDate = new Date();
   const today = todayKey(todayDate);
 
+  // 下面会在原地修改 todo 对象，所以先保存"改动前"的快照用于变化检测，
+  // 否则 JSON.stringify(nextTodos) 与 JSON.stringify(todos) 会因为引用相同而永远相等，
+  // 导致 workspaceId 的修正只停留在内存里、没有落盘。
+  const todosBefore = JSON.stringify(todos);
+  const eventsBefore = JSON.stringify(events);
+
   const goalById = new Map(goals.map((goal) => [goal.id, goal]));
   const desiredTodos = new Map();
 
@@ -362,8 +368,8 @@ function syncGoalRecurringTasks() {
     });
   }
 
-  if (JSON.stringify(nextTodos) !== JSON.stringify(todos)) writeTodos(nextTodos);
-  if (JSON.stringify(nextEvents) !== JSON.stringify(events)) writeCalendarEvents(nextEvents);
+  if (JSON.stringify(nextTodos) !== todosBefore) writeTodos(nextTodos);
+  if (JSON.stringify(nextEvents) !== eventsBefore) writeCalendarEvents(nextEvents);
 }
 
 function readReviews() {

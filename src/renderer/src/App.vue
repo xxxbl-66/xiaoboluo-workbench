@@ -35,9 +35,11 @@ import BookshelfView from './views/BookshelfView.vue';
 import ChatView from './views/ChatView.vue';
 import SettingsView from './views/SettingsView.vue';
 import { workbench } from './composables/useWorkbench.js';
+import { useWorkSession } from './composables/useWorkSession.js';
 
 const activeView = ref('dashboard');
 const sidebarExpanded = ref(false);
+const { initialize: initializeSession } = useWorkSession();
 const settings = ref({
   theme: 'light',
   extensions: { cloudBackup: false },
@@ -81,5 +83,7 @@ onMounted(async () => {
     settings.value = { theme: 'light' };
   }
   applyTheme(settings.value.theme);
+  // 重新打开应用时，如果上次没有结束工作，这里会把计时恢复出来
+  await initializeSession();
 });
 </script>

@@ -99,12 +99,20 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import Modal from './Modal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 
-const goals = ref([]);
+const props = defineProps({
+  /**
+   * 可选：只在某个工作空间内展示该空间的长期目标。
+   * 不传（null）时行为与原来完全一致 —— 展示全部目标。
+   */
+  workspaceId: { type: String, default: null }
+});
+
+const allGoals = ref([]);
 const showModal = ref(false);
 const editingGoal = ref(null);
 const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
@@ -116,6 +124,14 @@ const form = ref({
   recurrenceType: 'none',
   recurrenceDays: [],
   recurrenceTask: ''
+});
+
+const goals = computed(() => {
+  if (!props.workspaceId) return allGoals.value;
+  return allGoals.value.filter((goal) => {
+    const value = goal.workspaceId === undefined || goal.workspaceId === null ? null : String(goal.workspaceId);
+    return value === props.workspaceId;
+  });
 });
 
 function recurrenceLabel(goal) {
@@ -136,7 +152,7 @@ function formatDate(value) {
 }
 
 async function loadGoals() {
-  goals.value = await workbench.goals.list();
+  allGoals.value = await workbench.goals.list();
 }
 
 function openCreate() {
@@ -200,9 +216,10 @@ async function saveGoal() {
       recurrenceTask: recurrenceType === 'none' ? '' : (form.value.recurrenceTask || title)
     };
     if (editingGoal.value) {
+      // 编辑时不动 workspaceId
       await workbench.goals.update(editingGoal.value.id, payload);
     } else {
-      await workbench.goals.create(payload);
+      await workbench.goals.create({ ...payload, workspaceId: props.workspaceId || null });
     }
     await loadGoals();
     closeModal();

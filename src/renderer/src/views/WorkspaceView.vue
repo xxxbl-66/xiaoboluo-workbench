@@ -83,12 +83,56 @@
         </div>
       </section>
 
+      <WorkSessionPanel
+        :workspace-id="current.id"
+        :workspace-name="current.name"
+        :active-workspace-name="activeWorkspaceName"
+        :busy="starting"
+        @start="startWork"
+        @end="openEndModal"
+        @go-active="goActiveWorkspace"
+      />
+
+      <ResumeWorkCard
+        :session="lastSession"
+        :busy="resuming"
+        @resume="resumeLastWork"
+      />
+
       <section class="ws-section">
         <div class="ws-section__head">
           <h2>当前任务</h2>
           <p>这个工作空间内的待办；其他页面的待办不受影响。</p>
         </div>
         <TodoPanel :workspace-id="current.id" />
+      </section>
+
+      <section class="ws-section">
+        <div class="ws-section__head">
+          <h2>长期目标</h2>
+          <p>属于这个工作空间的长期目标，自动生成的待办会继承同样的归属。</p>
+        </div>
+        <GoalPanel :workspace-id="current.id" />
+      </section>
+
+      <section class="ws-section">
+        <div class="ws-section__head">
+          <h2>相关资源</h2>
+          <p>文件、便签、收藏与快捷应用。关联只改变归属，不会复制内容。</p>
+        </div>
+        <WorkspaceResources
+          :workspace-id="current.id"
+          :workspaces="workspaces"
+          @changed="loadWorkspaces"
+        />
+      </section>
+
+      <section class="ws-section">
+        <div class="ws-section__head">
+          <h2>工作流</h2>
+          <p>绑定这个工作空间会用到的工作流；「继续上次工作」最多自动运行一个。</p>
+        </div>
+        <WorkspaceWorkflows :workspace="current" :workflows="workflows" />
       </section>
     </template>
 
@@ -99,6 +143,15 @@
       @close="closeForm"
       @saved="saveWorkspace"
     />
+
+    <EndSessionModal
+      v-model="showEndModal"
+      :session="activeSession"
+      :todos="sessionTodos"
+      :saving="ending"
+      @close="showEndModal = false"
+      @submit="finishWork"
+    />
   </div>
 </template>
 
@@ -106,10 +159,17 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import LineIcon from '../components/LineIcon.vue';
 import TodoPanel from '../components/TodoPanel.vue';
+import GoalPanel from '../components/GoalPanel.vue';
 import WorkspaceCard from '../components/WorkspaceCard.vue';
 import WorkspaceFormModal from '../components/WorkspaceFormModal.vue';
+import WorkspaceResources from '../components/WorkspaceResources.vue';
+import WorkSessionPanel from '../components/WorkSessionPanel.vue';
+import ResumeWorkCard from '../components/ResumeWorkCard.vue';
+import WorkspaceWorkflows from '../components/WorkspaceWorkflows.vue';
+import EndSessionModal from '../components/EndSessionModal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { useWorkspace } from '../composables/useWorkspace.js';
+import { useWorkSession } from '../composables/useWorkSession.js';
 import { toast } from '../composables/toast.js';
 import { formatDuration, formatRelative } from '../utils/duration.js';
 
@@ -117,29 +177,44 @@ defineProps({
   settings: { type: Object, default: () => ({}) }
 });
 
-const { activeWorkspaceId, workspaceList, selectWorkspace, clearWorkspace, setWorkspaceList } = useWorkspace();
+const { activeWorkspaceId, workspaceList, selectWorkspace, clearWorkspace, setWorkspaceList, ensureSelectionValid } = useWorkspace();
+const { activeSession, startSession, endSession } = useWorkSession();
 
 const loading = ref(true);
 const showArchived = ref(false);
 const showForm = ref(false);
 const editing = ref(null);
 const workflows = ref([]);
+const starting = ref(false);
+const resuming = ref(false);
+const ending = ref(false);
+const showEndModal = ref(false);
+const sessionTodos = ref([]);
+const lastSession = ref(null);
 
 const workspaces = computed(() => workspaceList.value);
 const current = computed(() => (
   workspaceList.value.find((item) => item.id === activeWorkspaceId.value) || null
 ));
 
+const activeWorkspaceName = computed(() => {
+  if (!activeSession.value) return '';
+  const found = workspaceList.value.find((item) => item.id === activeSession.value.workspaceId);
+  return found ? found.name : '另一个工作空间';
+});
+
 async function loadWorkspaces() {
   try {
     const list = await workbench.workspaces.list({ includeArchived: showArchived.value });
     setWorkspaceList(list);
+    ensureSelectionValid();
   } catch (error) {
     toast(error.message, 'error');
     setWorkspaceList([]);
   } finally {
     loading.value = false;
   }
+  await loadLastSession();
 }
 
 async function loadWorkflows() {
@@ -218,6 +293,123 @@ async function restoreWorkspace(workspace) {
   }
 }
 
+/* ------------------------- 工作会话 ------------------------- */
+
+async function loadSessionTodos() {
+  try {
+    const todos = await workbench.todos.list();
+    const scope = current.value ? current.value.id : null;
+    sessionTodos.value = todos.filter((todo) => {
+      const value = todo.workspaceId === undefined || todo.workspaceId === null ? null : String(todo.workspaceId);
+      return scope !== null && value === scope;
+    });
+  } catch (_) {
+    sessionTodos.value = [];
+  }
+}
+
+async function startWork() {
+  if (!current.value) return;
+  starting.value = true;
+  try {
+    const result = await startSession(current.value.id);
+    if (result && result.started === false) {
+      toast('已有正在进行的工作，请先结束或返回那一项', 'error');
+      return;
+    }
+    toast('开始工作，计时已启动');
+    await loadWorkspaces();
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    starting.value = false;
+  }
+}
+
+async function openEndModal() {
+  await loadSessionTodos();
+  showEndModal.value = true;
+}
+
+async function finishWork(payload) {
+  ending.value = true;
+  try {
+    await endSession(payload);
+    showEndModal.value = false;
+    toast('本次工作已保存');
+    await loadWorkspaces();
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    ending.value = false;
+  }
+}
+
+/** 已有进行中的会话属于别的工作空间时，直接切过去 */
+async function goActiveWorkspace() {
+  const targetId = activeSession.value ? activeSession.value.workspaceId : null;
+  if (!targetId) {
+    toast('那次工作没有关联工作空间，可以直接结束它');
+    return;
+  }
+  selectWorkspace(targetId);
+  await loadWorkspaces();
+}
+
+/* ------------------------- 上次工作快照 ------------------------- */
+
+async function loadLastSession() {
+  if (!current.value) {
+    lastSession.value = null;
+    return;
+  }
+  try {
+    lastSession.value = await workbench.sessions.last(current.value.id);
+  } catch (_) {
+    lastSession.value = null;
+  }
+}
+
+/**
+ * 继续上次工作：
+ * 1) 检查是否已有进行中的会话，有就提示，不偷偷新建第二条
+ * 2) 新建本次会话并开始计时
+ * 3) 如果配置了 resumeWorkflowId（且仍然有效），自动运行这一个工作流
+ * 4) 工作流失败不回滚会话，只提示"部分工作环境未能打开"
+ */
+async function resumeLastWork() {
+  if (!current.value) return;
+  resuming.value = true;
+  try {
+    const result = await startSession(current.value.id);
+    if (result && result.started === false) {
+      toast('已有正在进行的工作，请先结束或返回那一项', 'error');
+      return;
+    }
+
+    toast('已开始工作，计时中');
+
+    const resumeId = current.value.resumeWorkflowId;
+    const validIds = Array.isArray(current.value.workflowIds) ? current.value.workflowIds : [];
+    const valid = resumeId && validIds.includes(resumeId) && workflows.value.some((item) => item.id === resumeId);
+
+    if (valid) {
+      try {
+        await workbench.workflows.run(resumeId);
+        toast('工作环境已恢复');
+        await loadWorkspaces();
+      } catch (error) {
+        // 会话保持工作状态，用户可以继续手动工作
+        toast(`工作已开始，但部分工作环境未能打开：${error.message || '执行失败'}`, 'error');
+      }
+    }
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    resuming.value = false;
+  }
+}
+
 // 进入详情时刷新一次，保证计数与最近工作信息是最新的
 watch(activeWorkspaceId, (value) => {
   if (value) loadWorkspaces();
@@ -231,8 +423,7 @@ watch(showArchived, () => {
 onMounted(() => {
   loadWorkspaces();
   loadWorkflows();
-});
-</script>
+});</script>
 
 <style scoped>
 .workspace-view {

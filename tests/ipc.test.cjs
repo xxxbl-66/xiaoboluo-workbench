@@ -418,3 +418,106 @@ test('IPC 冒烟：长期目标生成的待办继承 workspaceId，手动待办�
     cleanupDir(workRoot);
   }
 });
+
+test('IPC 冒烟：目标换工作空间后，它生成的待办跟着走', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const wsA = await invoke('workspaces:create', { name: 'A' });
+    const wsB = await invoke('workspaces:create', { name: 'B' });
+
+    const goal = await invoke('goals:create', { title: '目标', workspaceId: wsA.id });
+    await invoke('goals:update', goal.id, { recurrence: { type: 'daily', days: [] }, recurrenceTask: '每日' });
+
+    const before = (await invoke('todos:list')).filter((item) => item.sourceGoalId === goal.id);
+    assert.ok(before.length > 0);
+    assert.ok(before.every((item) => item.workspaceId === wsA.id));
+
+    await invoke('goals:update', goal.id, { workspaceId: wsB.id });
+
+    const after = (await invoke('todos:list')).filter((item) => item.sourceGoalId === goal.id);
+    assert.ok(after.length > 0);
+    assert.ok(after.every((item) => item.workspaceId === wsB.id), '生成待办应跟随目标换到 B');
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：工作空间详情数据（sessions:last）包含上次完成与当前剩余', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const ws = await invoke('workspaces:create', { name: '程序设计大赛' });
+
+    assert.equal(await invoke('sessions:last', ws.id), null, '还没有工作记录时应返回 null');
+
+    const done = await invoke('todos:create', { title: '登录页面', workspaceId: ws.id });
+    const pending = await invoke('todos:create', { title: '权限测试', workspaceId: ws.id });
+    await invoke('todos:create', { title: '别的空间的任务', workspaceId: null });
+
+    const started = await invoke('sessions:start', ws.id);
+    const ended = await invoke('sessions:end', started.session.id, {
+      note: 'Token 刷新接口还有问题',
+      nextStep: '修复 Token 刷新并进行权限测试',
+      completedTodoIds: [done.id]
+    });
+
+    const last = await invoke('sessions:last', ws.id);
+    assert.equal(last.id, ended.id);
+    assert.deepEqual(last.completedTodos.map((item) => item.id), [done.id]);
+    assert.deepEqual(
+      last.remainingTodos.map((item) => item.id),
+      [done.id, pending.id],
+      '剩余任务必须按工作空间过滤（未归类的不算进来）'
+    );
+
+    // 完成之后不应再出现在"当前剩余"里
+    await invoke('todos:update', done.id, { completed: true });
+    const last2 = await invoke('sessions:last', ws.id);
+    assert.deepEqual(last2.remainingTodos.map((item) => item.id), [pending.id]);
+    assert.deepEqual(last2.completedTodos.map((item) => item.id), [done.id], '上次完成是快照，不随之后的状态变化');
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：继续工作相关的工作流能力（run 成功 / 失败 / 已删除）', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+
+    // 成功路径：file 步骤 + 被 mock 的 shell.openPath
+    const target = path.join(workRoot, '项目文件夹');
+    fs.mkdirSync(target, { recursive: true });
+    const good = await invoke('workflows:create', {
+      name: '打开项目',
+      steps: [{ id: 's1', type: 'file', path: target, url: '', appId: '' }]
+    });
+    const runOk = await invoke('workflows:run', good.id);
+    assert.equal(runOk.ok, true);
+
+    // 失败路径：app 步骤引用不存在的应用
+    const bad = await invoke('workflows:create', {
+      name: '坏工作流',
+      steps: [{ id: 's1', type: 'app', appId: 'not-exist', path: '', url: '' }]
+    });
+    await assert.rejects(() => invoke('workflows:run', bad.id), /应用不存在/);
+
+    // 工作流被删除后，workspaces:update 不应报错，只是默认工作流失效
+    const ws = await invoke('workspaces:create', {
+      name: 'A',
+      workflowIds: [good.id],
+      resumeWorkflowId: good.id
+    });
+    assert.equal(ws.resumeWorkflowId, good.id);
+
+    await invoke('workflows:delete', good.id);
+    const afterDelete = await invoke('workspaces:list');
+    assert.equal(afterDelete[0].workflowIds.length, 1, 'workspaceId 侧仍然保留这个 id（容错由前端忽略）');
+
+    // 再次运行已删除的工作流应明确报错，而不是静默成功
+    await assert.rejects(() => invoke('workflows:run', good.id), /工作流不存在/);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
