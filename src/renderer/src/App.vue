@@ -25,6 +25,7 @@ import Sidebar from './components/Sidebar.vue';
 import ToastHost from './components/ToastHost.vue';
 import LineIcon from './components/LineIcon.vue';
 import DashboardView from './views/DashboardView.vue';
+import WorkspaceView from './views/WorkspaceView.vue';
 import FilesView from './views/FilesView.vue';
 import TodosView from './views/TodosView.vue';
 import CalendarView from './views/CalendarView.vue';
@@ -50,6 +51,7 @@ const settings = ref({
 
 const viewMap = {
   dashboard: DashboardView,
+  workspace: WorkspaceView,
   files: FilesView,
   todos: TodosView,
   calendar: CalendarView,

@@ -130,6 +130,14 @@ import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 import { sortTodosByQuadrant } from '../utils/quadrant.js';
 
+const props = defineProps({
+  /**
+   * 可选：只在某个工作空间内展示该空间的待办。
+   * 不传（null）时行为与原来完全一致 —— 展示全部待办。
+   */
+  workspaceId: { type: String, default: null }
+});
+
 const todos = ref([]);
 const filter = ref('all');
 const draft = ref({ title: '' });
@@ -139,6 +147,17 @@ const form = ref({ title: '', importance: 'high', urgency: 'high', dueDate: '', 
 const maxTasks = 10;
 let reminderTimer = null;
 
+function sameWorkspace(todo) {
+  const value = todo.workspaceId === undefined || todo.workspaceId === null ? null : String(todo.workspaceId);
+  return value === props.workspaceId;
+}
+
+/** 作用域内的待办：详情模式只看本空间，普通模式看全部（含未归类） */
+const scopedTodos = computed(() => {
+  if (!props.workspaceId) return todos.value;
+  return todos.value.filter(sameWorkspace);
+});
+
 const quadrants = {
   importantUrgent: { label: '重要且紧急', className: 'q-red', rank: 0 },
   importantNotUrgent: { label: '重要不紧急', className: 'q-blue', rank: 2 },
@@ -146,10 +165,10 @@ const quadrants = {
   notImportantNotUrgent: { label: '不重要不紧急', className: 'q-green', rank: 3 }
 };
 
-const pendingCount = computed(() => todos.value.filter((item) => !item.completed).length);
+const pendingCount = computed(() => scopedTodos.value.filter((item) => !item.completed).length);
 
 const filteredTodos = computed(() => {
-  const sorted = sortTodosByQuadrant(todos.value);
+  const sorted = sortTodosByQuadrant(scopedTodos.value);
   if (filter.value === 'pending') return sorted.filter((item) => !item.completed);
   return sorted;
 });
@@ -241,9 +260,10 @@ async function saveTodo() {
       reminderFired: false
     };
     if (editingTodo.value) {
+      // 编辑时不动 workspaceId，避免把已有归属改掉
       await workbench.todos.update(editingTodo.value.id, payload);
     } else {
-      await workbench.todos.create(payload);
+      await workbench.todos.create({ ...payload, workspaceId: props.workspaceId || null });
     }
     draft.value = { title: '' };
     await loadTodos();
@@ -263,9 +283,10 @@ async function removeTodo(todo) {
 }
 
 async function clearCompleted() {
-  const completed = todos.value.filter((item) => item.completed);
+  // 只清理当前作用域（工作空间详情内不会误删其他空间的待办）
+  const completed = scopedTodos.value.filter((item) => item.completed);
   if (!completed.length) {
-    toast('没有已完成的待办');
+    toast(props.workspaceId ? '本工作空间没有已完成的待办' : '没有已完成的待办');
     return;
   }
   await Promise.all(completed.map((item) => workbench.todos.remove(item.id)));

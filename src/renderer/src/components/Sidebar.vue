@@ -84,6 +84,7 @@ watch(
 
 const baseNavItems = [
   { id: 'dashboard', icon: 'dashboard', label: '驾驶舱' },
+  { id: 'workspace', icon: 'workspace', label: '工作空间' },
   { id: 'todos', icon: 'todos', label: '待办' },
   { id: 'calendar', icon: 'calendar', label: '日历' },
   { id: 'review', icon: 'review', label: '今日复盘' },
