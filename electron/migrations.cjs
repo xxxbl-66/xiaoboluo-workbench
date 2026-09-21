@@ -1,6 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const tables = require('./tables.cjs');
+
 /**
  * 轻量、幂等的全局数据迁移机制。
  *
@@ -81,6 +83,63 @@ function writeMeta(store, schemaVersion) {
 }
 
 /**
+ * 结构校验与安全修复。
+ *
+ * 与 schema 版本无关，每次启动都执行。遇到根类型错误 / JSON 语法损坏的表时：
+ * 1. 把原始文件改名为 `<name>.broken-<时间戳>`（与 DataStore 的自愈约定一致），
+ *    绝不静默丢弃原始数据
+ * 2. 写入该表的安全默认结构
+ * 3. 记录到 repaired，交由上层向用户报告
+ *
+ * 这样后续的普通启动链（syncGoalRecurringTasks 等）永远不会拿到非数组的表。
+ */
+function ensureTableRoots(store) {
+  const repaired = [];
+
+  for (const name of tables.tableNames()) {
+    const file = store.filePath(name);
+    if (!fs.existsSync(file)) continue;
+
+    let raw;
+    try {
+      raw = fs.readFileSync(file, 'utf8');
+    } catch (error) {
+      // 连读都读不了（权限/占用）时不能假装修好了，直接失败并且不写 schemaVersion
+      throw new Error(`无法读取数据文件 ${name}：${error.message}`);
+    }
+
+    let broken = false;
+    try {
+      broken = !tables.matchesKind(name, JSON.parse(raw));
+    } catch (_) {
+      broken = true;
+    }
+    if (!broken) continue;
+
+    const quarantine = `${file}.broken-${Date.now()}-${repaired.length}`;
+    let preserved = false;
+    try {
+      fs.renameSync(file, quarantine);
+      preserved = true;
+    } catch (_) {
+      // 改名失败时至少留一份原始内容副本，绝不直接覆盖
+      try {
+        fs.writeFileSync(`${quarantine}.copy`, raw, 'utf8');
+        preserved = true;
+      } catch (_) {}
+    }
+    if (!preserved) {
+      throw new Error(`数据文件 ${name} 结构不合法，且无法保留原始副本，已停止启动`);
+    }
+
+    store.write(name, tables.defaultsFor(name));
+    repaired.push({ name, backup: quarantine });
+  }
+
+  return repaired;
+}
+
+/**
  * v0 → v1：给已存在的记录补齐 workspaceId: null。
  * - 缺失 workspaceId 的老记录补 null（等价于"未归类"）
  * - 已有 workspaceId（含显式 null）一律不覆盖
@@ -115,6 +174,10 @@ const MIGRATIONS = [{ version: 1, name: 'add-workspace-id', run: migrateToV1 }];
  * @returns {{from:number,to:number,applied:string[],touched:string[],backupPath:string|null,skipped:boolean}}
  */
 function runMigrations(store, options = {}) {
+  // 先做结构校验与安全修复，保证后续任何读路径都不会拿到根类型错误的表。
+  // 这一步只能抛错（不可恢复），绝不"跳过 + 标记成功"。
+  const repaired = options.skipRepair ? [] : ensureTableRoots(store);
+
   const from = readMeta(store).schemaVersion;
   const targetVersion = Number.isFinite(options.targetVersion)
     ? Math.floor(options.targetVersion)
@@ -126,6 +189,7 @@ function runMigrations(store, options = {}) {
       to: from,
       applied: [],
       touched: [],
+      repaired,
       backupPath: null,
       skipped: true
     };
@@ -158,6 +222,7 @@ function runMigrations(store, options = {}) {
     to: targetVersion,
     applied,
     touched,
+    repaired,
     backupPath,
     backupError,
     skipped: false
@@ -170,6 +235,7 @@ module.exports = {
   WORKSPACE_TABLES,
   readMeta,
   writeMeta,
+  ensureTableRoots,
   runMigrations,
   createPreMigrationBackup,
   migrateToV1

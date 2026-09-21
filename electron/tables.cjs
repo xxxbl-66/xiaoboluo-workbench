@@ -10,6 +10,7 @@
  * 数组表默认是 []，对象表默认是 {} 形态的字面量。
  */
 
+const path = require('node:path');
 const { defaultGroups, defaultSettings } = require('./defaults.cjs');
 
 const READER_DEFAULTS = {
@@ -94,7 +95,7 @@ function matchesKind(name, value) {
 function isSafeTableName(name, dataDir) {
   if (typeof name !== 'string' || !name) return false;
   if (!isKnownTable(name)) return false;
-  if (name !== require('node:path').basename(name)) return false;
+  if (name !== path.basename(name)) return false;
   if (name.includes('/') || name.includes('\\')) return false;
   if (name.includes(':') || name.includes('\0')) return false;
   if (name.endsWith('.') || name.endsWith(' ')) return false;
@@ -103,7 +104,6 @@ function isSafeTableName(name, dataDir) {
   if (WINDOWS_RESERVED.has(stem)) return false;
 
   if (dataDir) {
-    const path = require('node:path');
     const base = path.resolve(dataDir);
     const target = path.resolve(base, name);
     if (target === base) return false;

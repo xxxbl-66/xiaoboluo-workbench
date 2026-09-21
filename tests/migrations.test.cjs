@@ -257,13 +257,25 @@ test('workspaceId 为 undefined 的键（JSON 无法表达）按缺失处理', (
   }
 });
 
-test('非数组内容（损坏的数据表）被安全跳过且不崩溃', () => {
+// P0-02：旧行为是"跳过非数组 + 仍写 schemaVersion=1"，会让启动链崩溃，已被推翻。
+test('非数组内容（损坏的数据表）被隔离并重建为安全结构，而不是跳过', () => {
   const dir = tempDir();
   try {
     const store = new DataStore(dir);
     store.write('todos.json', { not: 'an array' });
-    assert.doesNotThrow(() => migrations.runMigrations(store));
-    assert.deepEqual(readData(store, 'todos.json'), { not: 'an array' });
+
+    const result = migrations.runMigrations(store);
+
+    assert.equal(result.repaired.length, 1);
+    assert.equal(result.repaired[0].name, 'todos.json');
+
+    // 原始内容必须保留在 .broken- 副本里，不能被静默丢弃
+    const copies = fs.readdirSync(store.dataDir).filter((name) => name.startsWith('todos.json.broken-'));
+    assert.equal(copies.length, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(store.dataDir, copies[0]), 'utf8')), { not: 'an array' });
+
+    // 修复后的表必须是合法数组，后续启动链才不会崩
+    assert.deepEqual(readData(store, 'todos.json'), []);
     assert.equal(readData(store, migrations.META_FILE).schemaVersion, 1);
   } finally {
     cleanup(dir);
