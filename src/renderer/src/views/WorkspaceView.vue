@@ -148,6 +148,7 @@
       v-model="showEndModal"
       :session="activeSession"
       :todos="sessionTodos"
+      :workspace-name="sessionWorkspaceName"
       :saving="ending"
       @close="showEndModal = false"
       @submit="finishWork"
@@ -201,6 +202,13 @@ const activeWorkspaceName = computed(() => {
   if (!activeSession.value) return '';
   const found = workspaceList.value.find((item) => item.id === activeSession.value.workspaceId);
   return found ? found.name : '另一个工作空间';
+});
+
+/** 正在进行的 Session 所属工作空间的名字（结束弹窗里明确告诉用户在结束谁） */
+const sessionWorkspaceName = computed(() => {
+  if (!activeSession.value) return '';
+  const found = workspaceList.value.find((item) => item.id === activeSession.value.workspaceId);
+  return found ? found.name : '未归类的工作';
 });
 
 async function loadWorkspaces() {
@@ -295,13 +303,19 @@ async function restoreWorkspace(workspace) {
 
 /* ------------------------- 工作会话 ------------------------- */
 
+/**
+ * 结束弹窗里的待办必须按【正在进行的那个 Session 的 workspaceId】加载，
+ * 而不是当前正在浏览的 Workspace —— 否则会出现"在 B 里结束 A 的工作，
+ * 却把 B 的待办写进 A 的快照"。
+ */
 async function loadSessionTodos() {
   try {
+    const scope = activeSession.value ? activeSession.value.workspaceId : null;
+    const normalizedScope = scope === undefined || scope === null || scope === '' ? null : String(scope);
     const todos = await workbench.todos.list();
-    const scope = current.value ? current.value.id : null;
     sessionTodos.value = todos.filter((todo) => {
       const value = todo.workspaceId === undefined || todo.workspaceId === null ? null : String(todo.workspaceId);
-      return scope !== null && value === scope;
+      return value === normalizedScope;
     });
   } catch (_) {
     sessionTodos.value = [];

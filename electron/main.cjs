@@ -1334,8 +1334,26 @@ function registerIpc() {
   safeHandle('sessions:list', (options) => sessionService.listSessions(store, options || {}));
   safeHandle('sessions:get-active', () => sessionService.getActiveSession(store));
   safeHandle('sessions:start', (workspaceId) => sessionService.startSession(store, workspaceId));
-  safeHandle('sessions:end', (sessionId, patch) => sessionService.endSession(store, sessionId, patch || {}));
-  safeHandle('sessions:update', (sessionId, patch) => sessionService.updateSession(store, sessionId, patch || {}));
+
+  /**
+   * 结束会话。
+   * completedTodoIds 必须以【该 Session 自己的 workspaceId】为准做归属校验：
+   * 界面可能正停留在另一个 Workspace 上，不能把那边加载到的 Todo 写进来。
+   */
+  safeHandle('sessions:end', (sessionId, patch) => {
+    const session = sessionService.findSession(store, sessionId);
+    if (!session) throw new Error('工作记录不存在');
+    sessionService.assertTodosInScope(session, readTodos(), (patch || {}).completedTodoIds);
+    return sessionService.endSession(store, sessionId, patch || {});
+  });
+
+  safeHandle('sessions:update', (sessionId, patch) => {
+    const session = sessionService.findSession(store, sessionId);
+    if (!session) throw new Error('工作记录不存在');
+    sessionService.assertTodosInScope(session, readTodos(), (patch || {}).completedTodoIds);
+    return sessionService.updateSession(store, sessionId, patch || {});
+  });
+
   safeHandle('sessions:delete', (sessionId) => sessionService.deleteSession(store, sessionId));
   safeHandle('sessions:summary', (options) => sessionService.summarizeSessions(store, options || {}));
 

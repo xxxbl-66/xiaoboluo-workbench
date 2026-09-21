@@ -1,6 +1,10 @@
 <template>
   <Modal :model-value="modelValue" title="结束工作" width="560px" @close="$emit('close')">
     <div class="end-session">
+      <p v-if="workspaceName" class="end-session__target">
+        正在结束：<strong>{{ workspaceName }}</strong>
+      </p>
+
       <div class="end-session__summary">
         <div>
           <span>本次工作时间</span>
@@ -66,6 +70,8 @@ const props = defineProps({
   session: { type: Object, default: null },
   /** 当前工作空间内的待办 */
   todos: { type: Array, default: () => [] },
+  /** 正在结束的那个工作空间的名字（用户可能停留在别的 Workspace 上） */
+  workspaceName: { type: String, default: '' },
   saving: { type: Boolean, default: false }
 });
 
@@ -139,6 +145,19 @@ function submit() {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.end-session__target {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: var(--radius-xs);
+  background: var(--primary-soft);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.end-session__target strong {
+  color: var(--text);
 }
 
 .end-session__summary {

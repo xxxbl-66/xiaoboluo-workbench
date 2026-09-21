@@ -119,6 +119,43 @@ function normalizeTodoIds(value) {
 }
 
 /**
+ * 校验 completedTodoIds 是否都属于该 Session 自己的 workspaceId 作用域。
+ *
+ * 结束"另一个 Workspace 正在进行的工作"时，界面过去会按当前浏览的 Workspace
+ * 加载 Todo，把 B 的 Todo 写进 A 的 Session，污染快照与今日复盘。
+ * 这里在主进程把归属钉死：任一 Todo 不属于该 Session 的工作空间就整体拒绝，
+ * 不做静默过滤，避免出现"一半合法一半被丢掉"的难以察觉的数据污染。
+ */
+function assertTodosInScope(session, todos, completedTodoIds) {
+  const ids = normalizeTodoIds(completedTodoIds);
+  if (!ids || !ids.length) return [];
+
+  const scope = normalizeWorkspaceId(session && session.workspaceId);
+  const byId = new Map(
+    (Array.isArray(todos) ? todos : [])
+      .filter((todo) => todo && todo.id)
+      .map((todo) => [todo.id, todo])
+  );
+
+  const invalid = [];
+  for (const id of ids) {
+    const todo = byId.get(id);
+    if (!todo) {
+      invalid.push(`${id}（待办不存在）`);
+      continue;
+    }
+    if (normalizeWorkspaceId(todo.workspaceId) !== scope) {
+      invalid.push(`${id}（不属于本次工作的工作空间）`);
+    }
+  }
+
+  if (invalid.length) {
+    throw new Error(`以下待办不属于本次工作的范围，已阻止保存：${invalid.join('、')}`);
+  }
+  return ids;
+}
+
+/**
  * 结束会话。
  * durationSeconds 依据 startedAt 与结束时刻的真实时间差计算，不依赖前端计时器。
  */
@@ -280,5 +317,6 @@ module.exports = {
   deleteSession,
   lastFinishedSession,
   summarizeSessions,
-  totalsByWorkspace
+  totalsByWorkspace,
+  assertTodosInScope
 };
