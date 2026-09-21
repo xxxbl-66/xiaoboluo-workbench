@@ -315,20 +315,25 @@ async function notifyTodo(todo) {
 }
 
 async function checkReminders() {
-  const now = Date.now();
-  for (const todo of todos.value) {
-    if (todo.completed || !todo.reminderAt || todo.reminderFired) continue;
-    const at = new Date(todo.reminderAt).getTime();
-    if (Number.isNaN(at) || at > now) continue;
-    try {
-      await notifyTodo(todo);
-      // 提示已经发出后才标记，避免失败后永久不再提醒
-      await workbench.todos.update(todo.id, { reminderFired: true });
-    } catch (error) {
-      console.error('[reminder] 提醒处理失败', error);
+  try {
+    const now = Date.now();
+    for (const todo of todos.value) {
+      if (todo.completed || !todo.reminderAt || todo.reminderFired) continue;
+      const at = new Date(todo.reminderAt).getTime();
+      if (Number.isNaN(at) || at > now) continue;
+      try {
+        await notifyTodo(todo);
+        // 提示已经发出后才标记，避免失败后永久不再提醒
+        await workbench.todos.update(todo.id, { reminderFired: true });
+      } catch (error) {
+        console.error('[reminder] 提醒处理失败', error);
+      }
     }
+    await loadTodos();
+  } catch (error) {
+    // 定时器回调里的异常不能变成 unhandled rejection
+    console.error('[reminder] 检查提醒失败', error);
   }
-  await loadTodos();
 }
 
 onMounted(() => {

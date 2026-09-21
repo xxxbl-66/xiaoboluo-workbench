@@ -266,6 +266,7 @@ module.exports = {
   browseDirectory,
   normalizeScope,
   readFavorites,
+  writeFavorites,
   addFavorite,
   removeFavorite,
   readImages,
@@ -273,6 +274,7 @@ module.exports = {
   removeImage,
   hydrateImage,
   readNotes,
+  writeNotes,
   addNote,
   updateNote,
   deleteNote

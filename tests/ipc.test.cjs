@@ -467,6 +467,54 @@ test('IPC 冒烟：无权限目录返回可读错误而不是崩溃', async () =
   }
 });
 
+test('IPC 冒烟：快速便签读写可用（writeNotes 导出回归）', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+
+    const created = await invoke('files:notes:get-quick');
+    assert.ok(created && created.id, 'get-quick 应返回一条快速便签');
+    assert.equal(created.type, 'quick');
+
+    const saved = await invoke('files:notes:save-quick', '明天要做的事');
+    assert.equal(saved.content, '明天要做的事');
+
+    const reloaded = await invoke('files:notes:get-quick');
+    assert.equal(reloaded.content, '明天要做的事');
+    assert.equal(reloaded.id, created.id, '不应重复创建快速便签');
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：便签与文件收藏可以关联/解除关联工作空间（writeFavorites/writeNotes 导出回归）', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const ws = await invoke('workspaces:create', { name: 'A' });
+
+    const note = await invoke('files:notes:create', { title: '便签', content: 'x' });
+    const linkedNote = await invoke('workspaces:link-resource', { kind: 'note', id: note.id, workspaceId: ws.id });
+    assert.equal(linkedNote.workspaceId, ws.id);
+    const unlinkedNote = await invoke('workspaces:link-resource', { kind: 'note', id: note.id, workspaceId: null });
+    assert.equal(unlinkedNote.workspaceId, null);
+
+    const target = path.join(workRoot, '资料');
+    fs.mkdirSync(target, { recursive: true });
+    const favorites = await invoke('files:favorites:add', target);
+    const entry = favorites.find((item) => item.path === target);
+    assert.ok(entry, '应能收藏这个文件夹');
+
+    const linkedFav = await invoke('workspaces:link-resource', { kind: 'favorite', id: entry.id, workspaceId: ws.id });
+    assert.equal(linkedFav.workspaceId, ws.id);
+
+    const overview = await invoke('workspaces:list');
+    assert.equal(overview[0].id, ws.id);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
 test('IPC 冒烟：旧数据没有 workspaceId 时，原有列表通道仍然正常', async () => {
   const { electronMock, workRoot } = await loadMainWithMock();
   try {
