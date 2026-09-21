@@ -10,7 +10,8 @@
     "build": "vite build --configLoader native",
     "start": "electron .",
     "dist": "npm run build && electron-builder --win",
-    "dist:dir": "npm run build && electron-builder --dir"
+    "dist:dir": "npm run build && electron-builder --dir",
+    "test": "node --test \"tests/*.test.cjs\""
   },
   "dependencies": {
     "vue": "^3.5.13"

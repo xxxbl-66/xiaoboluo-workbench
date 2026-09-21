@@ -7,9 +7,47 @@ const appService = require('./services/apps.cjs');
 const fileService = require('./services/files.cjs');
 const launcherService = require('./services/launcher.cjs');
 const backupService = require('./services/backup.cjs');
+const migrations = require('./migrations.cjs');
 
 let mainWindow = null;
 let store = null;
+let migrationState = { schemaVersion: 0, ranAt: null, error: null };
+
+/**
+ * 启动时执行一次轻量数据迁移。
+ * 失败时不更新 schemaVersion，并向用户明确报告（不静默吞掉）。
+ */
+function runStartupMigrations() {
+  try {
+    const result = migrations.runMigrations(store);
+    migrationState = {
+      schemaVersion: result.to,
+      ranAt: new Date().toISOString(),
+      error: null,
+      skipped: result.skipped,
+      backupPath: result.backupPath || null
+    };
+    if (!result.skipped) {
+      console.log('[migration] 数据迁移完成', JSON.stringify(result));
+    }
+    return migrationState;
+  } catch (error) {
+    migrationState = {
+      schemaVersion: migrations.readMeta(store).schemaVersion,
+      ranAt: new Date().toISOString(),
+      error: error.message || String(error)
+    };
+    console.error('[migration] 数据迁移失败：', migrationState.error);
+    try {
+      dialog.showErrorBox(
+        '数据升级未完成',
+        `工作台在升级本地数据时遇到问题，已停止升级以保护你的数据。\n\n原因：${migrationState.error}\n\n` +
+          `原有数据文件没有被删除，可以继续使用；如需排查请查看备份目录。`
+      );
+    } catch (_) {}
+    return migrationState;
+  }
+}
 
 function configRoot() {
   return path.join(app.getPath('documents'), '小菠萝的工作台');
@@ -532,7 +570,8 @@ function registerIpc() {
   safeHandle('app:info', () => ({
     version: app.getVersion(),
     dataDir: store.baseDir,
-    dataRoot: store.dataDir
+    dataRoot: store.dataDir,
+    schemaVersion: migrationState.schemaVersion
   }));
 
   safeHandle('settings:get', () => store.read('settings.json', defaultSettings()));
@@ -1227,6 +1266,7 @@ app.on('web-contents-created', (_event, contents) => {
 
 app.whenReady().then(() => {
   store = new DataStore(dataRoot());
+  runStartupMigrations();
   applyLaunchAtStartup(Boolean(store.read('settings.json', defaultSettings()).launchAtStartup));
   syncGoalRecurringTasks();
   setInterval(syncGoalRecurringTasks, 60 * 60 * 1000);
