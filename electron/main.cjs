@@ -15,6 +15,7 @@ const { todayKey: localTodayKey } = require('./dates.cjs');
 
 let mainWindow = null;
 let store = null;
+let pendingSecondInstanceFocus = false;
 let migrationState = { schemaVersion: 0, ranAt: null, error: null, repaired: [], fatal: false };
 
 /**
@@ -1581,6 +1582,27 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // 第二次启动发生在窗口建好之前时，这里补一次聚焦
+  if (pendingSecondInstanceFocus) {
+    pendingSecondInstanceFocus = false;
+    focusMainWindow();
+  }
+}
+
+/**
+ * 把已有主窗口带到前台。
+ * 窗口可能还没建立（第二次启动发生在启动早期），此时只记一个待办标记，
+ * 等 createWindow() 完成后再补聚焦。
+ */
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    pendingSecondInstanceFocus = true;
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
 }
 
 app.on('web-contents-created', (_event, contents) => {
@@ -1606,53 +1628,72 @@ app.on('web-contents-created', (_event, contents) => {
   } catch (_) {}
 });
 
-app.whenReady().then(() => {
-  // Windows 上系统通知必须设置 AppUserModelId，否则通知不会显示
-  if (process.platform === 'win32') {
-    try {
-      app.setAppUserModelId('com.xiaoboluo.workbench');
-    } catch (_) {}
-  }
-  store = new DataStore(dataRoot());
+/**
+ * 单实例锁。
+ *
+ * 每个实例都有独立的渲染进程状态，却共用同一批 JSON 文件；DataStore 只有
+ * 单文件临时替换，没有跨进程 compare-and-swap。两个实例同时运行会互相覆盖
+ * 整表内容（比赛现场重复双击启动就可能触发）。
+ * 桌面 MVP 的正确做法就是只允许单实例：拿不到锁的进程直接退出，
+ * 不建窗口、不注册 IPC、绝不参与数据写入。
+ */
+const singleInstanceLock = app.requestSingleInstanceLock();
 
-  // 数据安全闸门：结构修复 + 版本迁移。
-  // 不可恢复的失败必须停止启动，绝不能进入会写数据的普通链路。
-  const guard = runStartupMigrations();
-  if (guard.fatal) {
-    app.exit(1);
-    return;
-  }
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    focusMainWindow();
+  });
 
-  applyLaunchAtStartup(Boolean(store.read('settings.json', defaultSettings()).launchAtStartup));
-  syncGoalRecurringTasks();
-  setInterval(syncGoalRecurringTasks, 60 * 60 * 1000);
-
-  const booksSession = session.fromPartition('persist:bookshelf');
-  booksSession.on('will-download', (event, item) => {
-    try {
-      const filename = item.getFilename() || `book-${Date.now()}.txt`;
-      const savePath = path.join(store.booksDir, filename);
-      item.setSavePath(savePath);
-      item.once('done', (_doneEvent, state) => {
-        if (state === 'completed') {
-          const book = addBookFromPath(savePath);
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('books:changed', book);
-          }
-        }
-      });
-    } catch (_) {
-      event.preventDefault();
+  app.whenReady().then(() => {
+    // Windows 上系统通知必须设置 AppUserModelId，否则通知不会显示
+    if (process.platform === 'win32') {
+      try {
+        app.setAppUserModelId('com.xiaoboluo.workbench');
+      } catch (_) {}
     }
-  });
+    store = new DataStore(dataRoot());
 
-  registerIpc();
-  createWindow();
+    // 数据安全闸门：结构修复 + 版本迁移。
+    // 不可恢复的失败必须停止启动，绝不能进入会写数据的普通链路。
+    const guard = runStartupMigrations();
+    if (guard.fatal) {
+      app.exit(1);
+      return;
+    }
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    applyLaunchAtStartup(Boolean(store.read('settings.json', defaultSettings()).launchAtStartup));
+    syncGoalRecurringTasks();
+    setInterval(syncGoalRecurringTasks, 60 * 60 * 1000);
+
+    const booksSession = session.fromPartition('persist:bookshelf');
+    booksSession.on('will-download', (event, item) => {
+      try {
+        const filename = item.getFilename() || `book-${Date.now()}.txt`;
+        const savePath = path.join(store.booksDir, filename);
+        item.setSavePath(savePath);
+        item.once('done', (_doneEvent, state) => {
+          if (state === 'completed') {
+            const book = addBookFromPath(savePath);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('books:changed', book);
+            }
+          }
+        });
+      } catch (_) {
+        event.preventDefault();
+      }
+    });
+
+    registerIpc();
+    createWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   });
-});
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

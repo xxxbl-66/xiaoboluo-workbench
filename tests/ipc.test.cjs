@@ -28,6 +28,9 @@ function createElectronMock(workRoot) {
     getAppPath: () => ROOT,
     setLoginItemSettings: () => {},
     setAppUserModelId: () => {},
+    // P1-03：main.cjs 现在会先抢单实例锁；这里的 mock 扮演"第一个实例"
+    requestSingleInstanceLock: () => true,
+    hasSingleInstanceLock: () => true,
     relaunch: () => {},
     exit: () => {},
     quit: () => {},
