@@ -84,11 +84,12 @@ test('导入恶意备份不会写到数据目录之外（P0 路径穿越）', ()
 
     const result = importBackup(store, file);
 
-    assert.equal(result.ok, true);
-    assert.equal(result.count, 1, '只有合法的 todos.json 被写入');
-    assert.ok(result.skipped.includes('..\\..\\evil.json'));
+    // P0-01 后语义收紧：只要有一张表不合法，整个导入被拒绝，不做部分写入
+    assert.equal(result.ok, false, '含非法表名的备份必须整体拒绝');
+    assert.match(result.error, /无法识别/);
     assert.equal(fs.existsSync(evilTarget), false, '数据目录之外不能出现新文件');
-    assert.deepEqual(JSON.parse(fs.readFileSync(store.filePath('todos.json'), 'utf8')), [{ id: 'legit' }]);
+    assert.equal(fs.existsSync(store.filePath('todos.json')), false, '被拒绝的导入不得写入任何表');
+    assert.equal(fs.existsSync(store.filePath('sub')), false, '不得创建子目录');
 
     const strays = fs.readdirSync(dir).filter((name) => name.endsWith('.json'));
     assert.deepEqual(strays, [], `数据目录根下不应出现杂散文件：${strays.join(',')}`);

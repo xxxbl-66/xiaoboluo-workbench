@@ -1243,7 +1243,10 @@ function registerIpc() {
       filters: [{ name: '工作台备份', extensions: ['json'] }]
     });
     if (result.canceled || !result.filePaths.length) return { canceled: true };
-    return backupService.importBackup(store, result.filePaths[0]);
+    const imported = backupService.importBackup(store, result.filePaths[0]);
+    // 导入被拒绝时必须让渲染层看到失败，不能把 {ok:false} 包成 IPC 成功
+    if (imported && imported.ok === false) throw new Error(imported.error || '导入失败');
+    return imported;
   });
 
   /* ---------------------------------------------------------------
