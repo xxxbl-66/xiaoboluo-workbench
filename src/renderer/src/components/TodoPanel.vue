@@ -293,24 +293,42 @@ async function clearCompleted() {
   await loadTodos();
 }
 
-function notifyTodo(todo) {
+/**
+ * 待办提醒。
+ *
+ * 修复 P1-1：渲染进程的 new Notification() 在 Windows 上不会真正显示，
+ * 而且构造函数不抛错，导致原来的 catch 兜底永远不执行、reminderFired 却被置为 true，
+ * 提醒变成"静默且不可恢复"的失效。
+ * 现在改为：主进程系统通知 + 可见 toast 兜底，只有确实提示过才写入 reminderFired。
+ */
+async function notifyTodo(todo) {
+  let shown = false;
   try {
-    const notification = new Notification('待办提醒', { body: todo.title });
-    notification.onclick = () => window.focus();
+    const result = await workbench.system.notify({ title: '待办提醒', body: todo.title });
+    shown = Boolean(result && result.shown);
   } catch (_) {
-    toast(`待办提醒：${todo.title}`);
+    shown = false;
   }
+  // toast 由应用自己渲染，一定可见，作为兜底同时提供
+  toast(`待办提醒：${todo.title}`, shown ? 'info' : 'error');
+  return shown;
 }
 
-function checkReminders() {
+async function checkReminders() {
   const now = Date.now();
   for (const todo of todos.value) {
     if (todo.completed || !todo.reminderAt || todo.reminderFired) continue;
     const at = new Date(todo.reminderAt).getTime();
     if (Number.isNaN(at) || at > now) continue;
-    workbench.todos.update(todo.id, { reminderFired: true }).then(() => loadTodos());
-    notifyTodo(todo);
+    try {
+      await notifyTodo(todo);
+      // 提示已经发出后才标记，避免失败后永久不再提醒
+      await workbench.todos.update(todo.id, { reminderFired: true });
+    } catch (error) {
+      console.error('[reminder] 提醒处理失败', error);
+    }
   }
+  await loadTodos();
 }
 
 onMounted(() => {
@@ -321,8 +339,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (reminderTimer) clearInterval(reminderTimer);
-});
-</script>
+});</script>
 
 <style scoped>
 .todo-module {

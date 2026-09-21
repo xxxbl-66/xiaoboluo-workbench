@@ -39,9 +39,27 @@ function revealPath(filePath) {
   return { ok: true };
 }
 
-function openExternal(url) {
-  shell.openExternal(url);
-  return { ok: true };
+/** 只允许 http/https 交给系统浏览器，避免 file: / 自定义协议被拉起本机程序 */
+function isSafeExternalUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+}
+
+async function openExternal(url) {
+  if (!isSafeExternalUrl(url)) {
+    return { ok: false, error: '只支持打开 http 或 https 链接' };
+  }
+  try {
+    await shell.openExternal(url);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error.message || '打开链接失败' };
+  }
 }
 
 function delay(ms) {
@@ -79,5 +97,6 @@ module.exports = {
   openPath,
   revealPath,
   openExternal,
+  isSafeExternalUrl,
   runWorkflow
 };

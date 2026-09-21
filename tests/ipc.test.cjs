@@ -18,6 +18,8 @@ function createElectronMock(workRoot) {
   const handlers = new Map();
   const documents = path.join(workRoot, 'documents');
   fs.mkdirSync(documents, { recursive: true });
+  const openedExternal = [];
+  const notifications = [];
 
   const app = {
     isPackaged: false,
@@ -25,6 +27,7 @@ function createElectronMock(workRoot) {
     getPath: (name) => (name === 'documents' ? documents : workRoot),
     getAppPath: () => ROOT,
     setLoginItemSettings: () => {},
+    setAppUserModelId: () => {},
     relaunch: () => {},
     exit: () => {},
     quit: () => {},
@@ -45,15 +48,35 @@ function createElectronMock(workRoot) {
     isDestroyed() {
       return false;
     }
+    isMinimized() {
+      return false;
+    }
+    show() {}
+    focus() {}
     on() {}
     static getAllWindows() {
       return [];
     }
   }
 
+  class Notification {
+    constructor(options) {
+      notifications.push(options);
+      this.handlers = {};
+    }
+    on(event, handler) {
+      this.handlers[event] = handler;
+    }
+    show() {}
+    static isSupported() {
+      return true;
+    }
+  }
+
   return {
     app,
     BrowserWindow,
+    Notification,
     ipcMain: {
       handle: (channel, fn) => handlers.set(channel, fn),
       on: () => {}
@@ -65,7 +88,9 @@ function createElectronMock(workRoot) {
     shell: {
       openPath: async () => '',
       showItemInFolder: () => {},
-      openExternal: () => Promise.resolve()
+      openExternal: async (url) => {
+        openedExternal.push(url);
+      }
     },
     session: {
       fromPartition: () => ({ on: () => {} })
@@ -77,7 +102,9 @@ function createElectronMock(workRoot) {
       })
     },
     __handlers: handlers,
-    __documents: documents
+    __documents: documents,
+    __openedExternal: openedExternal,
+    __notifications: notifications
   };
 }
 
@@ -348,6 +375,93 @@ test('IPC 冒烟：path-exists 返回 boolean 而不是抛错', async () => {
     const batch = await invoke('system:path-exists-batch', [existing, path.join(workRoot, 'nope.txt')]);
     assert.equal(batch[existing], true);
     assert.equal(batch[path.join(workRoot, 'nope.txt')], false);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：openExternal 只允许 http/https（P1-6 协议白名单）', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+
+    await invoke('system:open-external', 'https://github.com/xiaoboluo');
+    await invoke('system:open-external', 'http://example.com');
+    assert.deepEqual(electronMock.__openedExternal, ['https://github.com/xiaoboluo', 'http://example.com']);
+
+    for (const bad of ['file:///C:/Windows/System32/calc.exe', 'ms-settings:', 'javascript:alert(1)', 'ftp://x/y', '', 'nonsense']) {
+      await assert.rejects(() => invoke('system:open-external', bad), /http/, `应拒绝：${bad}`);
+    }
+    assert.equal(electronMock.__openedExternal.length, 2, '被拒绝的协议不能到达 shell.openExternal');
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：待办提醒走主进程通知（P1-1）', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const result = await invoke('system:notify', { title: '待办提醒', body: '提交比赛材料' });
+    assert.equal(result.shown, true);
+    assert.equal(electronMock.__notifications.length, 1);
+    assert.equal(electronMock.__notifications[0].body, '提交比赛材料');
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：review:get 是只读的，不再写盘（P1-3）', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const dataDir = path.join(electronMock.__documents, '小菠萝的工作台', 'data');
+    const reviewFile = path.join(dataDir, 'daily-review.json');
+
+    const readRecords = () => (fs.existsSync(reviewFile)
+      ? JSON.parse(fs.readFileSync(reviewFile, 'utf8'))
+      : null);
+
+    const before = readRecords();
+
+    const record = await invoke('review:get', '2026-05-20');
+    assert.equal(record.date, '2026-05-20');
+    assert.equal(record.readingMinutes, 0);
+    assert.deepEqual(record.answers, { whatDid: '', whatLearned: '', whatImprove: '' });
+
+    const after = readRecords();
+    assert.deepEqual(after, before === null ? [] : before, 'review:get 不应新增任何复盘记录');
+
+    const list = await invoke('review:list');
+    assert.deepEqual(list, [], '不应该凭空产生一条空复盘记录');
+
+    // 只有 update 才落盘
+    await invoke('review:update', '2026-05-20', { answers: { whatDid: '完成了工作空间' } });
+    const saved = await invoke('review:list');
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].answers.whatDid, '完成了工作空间');
+    // 部分更新不应覆盖其他字段
+    await invoke('review:update', '2026-05-20', { readingMinutes: 30 });
+    const saved2 = await invoke('review:get', '2026-05-20');
+    assert.equal(saved2.answers.whatDid, '完成了工作空间');
+    assert.equal(saved2.readingMinutes, 30);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟：无权限目录返回可读错误而不是崩溃', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const result = await invoke('files:browse', path.join(workRoot, '不存在的目录'));
+    assert.equal(result.error, '目录不存在');
+    assert.deepEqual(result.entries, []);
+
+    // 正常目录依然可用
+    const ok = await invoke('files:browse', workRoot);
+    assert.equal(ok.error, null);
+    assert.ok(Array.isArray(ok.entries));
   } finally {
     cleanupDir(workRoot);
   }

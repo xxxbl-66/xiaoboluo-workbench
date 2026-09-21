@@ -43,7 +43,22 @@ function browseDirectory(dir) {
 
   const parent = path.dirname(current);
   const entries = [];
-  for (const name of fs.readdirSync(current)) {
+  // 无权限目录 / 被占用目录（如 C:\System Volume Information）会让 readdirSync 抛错，
+  // 之前会直接冒泡成 IPC 失败，文件页只看到一片空白。这里返回可读错误。
+  let names = [];
+  try {
+    names = fs.readdirSync(current);
+  } catch (error) {
+    const code = error && error.code;
+    const message = code === 'EPERM' || code === 'EACCES'
+      ? '没有访问这个文件夹的权限'
+      : code === 'EBUSY'
+        ? '这个文件夹正被占用'
+        : '无法读取目录内容';
+    return { path: current, parent: parent === current ? null : parent, entries: [], error: message };
+  }
+
+  for (const name of names) {
     const full = path.join(current, name);
     try {
       const itemStat = fs.statSync(full);

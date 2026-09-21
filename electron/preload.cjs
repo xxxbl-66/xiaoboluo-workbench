@@ -40,7 +40,8 @@ const api = {
     openLogsDir: () => invoke('system:open-logs-dir'),
     openExternal: (url) => invoke('system:open-external', url),
     pathExists: (targetPath) => invoke('system:path-exists', targetPath),
-    pathExistsBatch: (paths) => invoke('system:path-exists-batch', paths)
+    pathExistsBatch: (paths) => invoke('system:path-exists-batch', paths),
+    notify: (payload) => invoke('system:notify', payload)
   },
   apps: {
     list: () => invoke('apps:list'),

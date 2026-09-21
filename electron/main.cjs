@@ -1,6 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs');
-const { app, BrowserWindow, ipcMain, dialog, shell, session, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, nativeImage, Notification } = require('electron');
 const { DataStore } = require('./store.cjs');
 const { defaultSettings, id } = require('./defaults.cjs');
 const appService = require('./services/apps.cjs');
@@ -380,21 +380,41 @@ function writeReviews(items) {
   store.write('daily-review.json', items);
 }
 
+/**
+ * 读取某天的复盘记录。
+ * 修复 P1-3：读操作不再产生副作用（原来会创建并写入空记录，污染 daily-review.json）。
+ * 落盘交给 review:update。
+ */
 function getReviewRecord(date) {
   const items = readReviews();
-  let record = items.find((item) => item.date === date);
-  if (!record) {
-    record = {
-      date,
-      readingMinutes: 0,
-      focusMinutes: 0,
-      answers: { whatDid: '', whatLearned: '', whatImprove: '' },
-      updatedAt: new Date().toISOString()
-    };
-    items.push(record);
-    writeReviews(items);
-  }
-  return record;
+  const record = items.find((item) => item.date === date);
+  if (record) return record;
+  return {
+    date,
+    readingMinutes: 0,
+    focusMinutes: 0,
+    answers: { whatDid: '', whatLearned: '', whatImprove: '' },
+    updatedAt: null
+  };
+}
+
+function saveReviewRecord(date, patch) {
+  const items = readReviews();
+  const index = items.findIndex((item) => item.date === date);
+  const current = index === -1
+    ? { date, readingMinutes: 0, focusMinutes: 0, answers: { whatDid: '', whatLearned: '', whatImprove: '' } }
+    : items[index];
+  const next = {
+    ...current,
+    ...patch,
+    answers: { ...current.answers, ...(patch.answers || {}) },
+    date,
+    updatedAt: new Date().toISOString()
+  };
+  if (index === -1) items.push(next);
+  else items[index] = next;
+  writeReviews(items);
+  return next;
 }
 function readBooks() {
   return store.read('books.json', []);
@@ -467,6 +487,18 @@ function allowedWebviewHosts() {
     })
     .filter(Boolean);
   return [...chatHosts, ...storeHosts];
+}
+
+/** webview 可以加载的主机：内置 AI 站点 + 用户自己添加的书城 */
+function isAllowedWebviewUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl || '');
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    const host = url.hostname;
+    return allowedWebviewHosts().some((item) => host === item || host.endsWith(`.${item}`));
+  } catch (_) {
+    return false;
+  }
 }
 
 function addBookFromPath(filePath) {
@@ -719,8 +751,12 @@ function registerIpc() {
   safeHandle('system:open-path', (filePath) => launcherService.openPath(filePath));
   safeHandle('system:open-data-dir', () => launcherService.openPath(store.baseDir));
   safeHandle('system:open-logs-dir', () => launcherService.openPath(store.logsDir));
-  safeHandle('system:open-external', (url) => launcherService.openExternal(url));
-  safeHandle('settings:change-data-dir', async () => {
+  safeHandle('system:open-external', async (url) => {
+    const result = await launcherService.openExternal(url);
+    // 失败必须冒泡到渲染层，否则"网页没打开"也会被当成成功
+    if (result && result.ok === false) throw new Error(result.error || '打开链接失败');
+    return result;
+  });  safeHandle('settings:change-data-dir', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择新的数据目录',
       properties: ['openDirectory', 'createDirectory']
@@ -1086,33 +1122,8 @@ function registerIpc() {
 
   safeHandle('review:list', () => readReviews().slice().sort((a, b) => (b.updatedAt || b.date || '').localeCompare(a.updatedAt || a.date || '')));
   safeHandle('review:get', (date) => getReviewRecord(date || todayKey()));
-  safeHandle('review:update', (date, patch) => {
-    const items = readReviews();
-    const record = items.find((item) => item.date === date);
-    if (!record) {
-      const created = {
-        date,
-        readingMinutes: 0,
-        focusMinutes: 0,
-        answers: { whatDid: '', whatLearned: '', whatImprove: '' },
-        updatedAt: new Date().toISOString(),
-        ...patch
-      };
-      items.push(created);
-      writeReviews(items);
-      return created;
-    }
-    const answers = { ...record.answers, ...(patch.answers || {}) };
-    const next = {
-      ...record,
-      ...patch,
-      answers,
-      updatedAt: new Date().toISOString()
-    };
-    items[items.findIndex((item) => item.date === date)] = next;
-    writeReviews(items);
-    return next;
-  });
+  // 写盘只发生在 review:update（修复 P1-3：读操作不再产生副作用）
+  safeHandle('review:update', (date, patch) => saveReviewRecord(date, patch || {}));
   safeHandle('books:list', () => readBooks());
   safeHandle('books:add', (filePath) => addBookFromPath(filePath));
   safeHandle('books:update', (bookId, patch) => {
@@ -1336,6 +1347,28 @@ function registerIpc() {
     return result;
   });
 
+  /**
+   * 待办提醒：在【主进程】弹系统通知。
+   * 渲染进程的 new Notification() 在 Windows 上不会显示（构造函数也不抛错），
+   * 这正是"提醒静默失效"的根因。主进程 + AppUserModelId 才是可用路径。
+   * 返回 { shown } 让渲染层知道是否真的弹出，避免悄悄把 reminderFired 置为 true。
+   */
+  safeHandle('system:notify', (payload) => {
+    const title = String((payload && payload.title) || '小菠萝的工作台');
+    const body = String((payload && payload.body) || '');
+    if (!Notification.isSupported()) return { shown: false, reason: 'unsupported' };
+    const notification = new Notification({ title, body, silent: false });
+    notification.on('click', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+    notification.show();
+    return { shown: true };
+  });
+
   safeHandle('workspaces:link-resource', (payload) => linkResource(payload || {}));
 }
 
@@ -1474,17 +1507,13 @@ function createWindow() {
     webPreferences.sandbox = true;
     webPreferences.webSecurity = true;
 
-    try {
-      const url = new URL(params.src || '');
-      const allowed = allowedWebviewHosts().some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
-      if (!allowed) event.preventDefault();
-    } catch (_) {
-      event.preventDefault();
-    }
+    // 只校验首次 attach 是不够的：webview 内部还能继续导航
+    if (!isAllowedWebviewUrl(params.src)) event.preventDefault();
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // 只允许 http/https 交给系统浏览器，避免 file: / 自定义协议被用来拉起本机程序
+    launcherService.openExternal(url);
     return { action: 'deny' };
   });
 
@@ -1501,15 +1530,35 @@ function createWindow() {
 }
 
 app.on('web-contents-created', (_event, contents) => {
-  if (contents.getType() === 'webview') {
-    contents.setWindowOpenHandler(({ url }) => {
-      shell.openExternal(url);
-      return { action: 'deny' };
-    });
-  }
+  if (contents.getType() !== 'webview') return;
+
+  // 弹窗一律拒绝，只有 http/https 才转交系统浏览器（修复 P1-6）
+  contents.setWindowOpenHandler(({ url }) => {
+    launcherService.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  // 首次 attach 之后 webview 内部仍然可以继续导航，这里对后续导航做同样的主机白名单校验
+  contents.on('will-navigate', (event, url) => {
+    if (!isAllowedWebviewUrl(url)) event.preventDefault();
+  });
+  contents.on('will-redirect', (event, url) => {
+    if (!isAllowedWebviewUrl(url)) event.preventDefault();
+  });
+
+  // webview 里的第三方页面不应拿到摄像头/麦克风/地理位置/通知等权限
+  try {
+    contents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  } catch (_) {}
 });
 
 app.whenReady().then(() => {
+  // Windows 上系统通知必须设置 AppUserModelId，否则通知不会显示
+  if (process.platform === 'win32') {
+    try {
+      app.setAppUserModelId('com.xiaoboluo.workbench');
+    } catch (_) {}
+  }
   store = new DataStore(dataRoot());
   runStartupMigrations();
   applyLaunchAtStartup(Boolean(store.read('settings.json', defaultSettings()).launchAtStartup));

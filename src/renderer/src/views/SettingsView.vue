@@ -220,6 +220,12 @@ async function importBackup() {
   try {
     const result = await workbench.backup.import();
     if (result && result.canceled) return;
+    const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
+    if (skipped) {
+      // 备份里含有不安全的文件名（如路径穿越），这些条目已被拒绝写入
+      toast(`已导入 ${result.count} 个数据文件，另有 ${skipped} 个条目因文件名不安全被跳过，重启应用后生效`, 'error');
+      return;
+    }
     toast(`已导入 ${result.count} 个数据文件，重启应用后生效`);
   } catch (error) {
     toast(error.message, 'error');
