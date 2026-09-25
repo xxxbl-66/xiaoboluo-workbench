@@ -54,8 +54,8 @@
 
           <div v-else-if="step.type === 'file'" class="workflow-path">
             <input v-model="step.path" placeholder="文件或文件夹路径" @input="delete stepErrors[index]" />
-            <button class="ghost small" type="button" @click="choosePath(step, 'file')">选择文件</button>
-            <button class="ghost small" type="button" @click="choosePath(step, 'directory')">选择文件夹</button>
+            <button class="ghost small" type="button" :disabled="choosingPath" @click="choosePath(step, 'file')">选择文件</button>
+            <button class="ghost small" type="button" :disabled="choosingPath" @click="choosePath(step, 'directory')">选择文件夹</button>
           </div>
           <input v-else-if="step.type === 'url'" v-model="step.url" placeholder="https://…" @input="delete stepErrors[index]" />
           <span v-else class="workflow-step__legacy">请选择支持的步骤类型</span>
@@ -99,6 +99,7 @@ const nameError = ref('');
 const formError = ref('');
 const stepErrors = ref({});
 const saving = ref(false);
+const choosingPath = ref(false);
 const running = ref(null);
 const runFeedback = ref(null);
 let mounted = true;
@@ -149,12 +150,16 @@ function removeStep(index) {
 }
 
 async function choosePath(step, kind) {
+  if (choosingPath.value) return;
+  choosingPath.value = true;
   try {
     const picker = kind === 'file' ? workbench.system.selectFile : workbench.system.selectDirectory;
-    const changed = await chooseWorkflowPath(step, picker, () => showModal.value && form.value.steps.includes(step));
+    const changed = await chooseWorkflowPath(step, picker, () => mounted && showModal.value && form.value.steps.includes(step));
     if (changed) stepErrors.value = {};
   } catch (error) {
-    toast(error.message || '选择路径失败', 'error');
+    if (mounted) toast(error.message || '选择路径失败', 'error');
+  } finally {
+    choosingPath.value = false;
   }
 }
 
@@ -168,16 +173,22 @@ function normalizeWorkflow(item) {
 
 async function loadData() {
   try {
-    workflows.value = (await workbench.workflows.list()).map(normalizeWorkflow);
+    const list = await workbench.workflows.list();
+    if (mounted) workflows.value = list.map(normalizeWorkflow);
   } catch (error) {
-    toast(error.message, 'error');
+    if (mounted) toast(error.message, 'error');
   }
   try {
-    apps.value = await workbench.apps.list();
-    appsLoaded.value = true;
+    const list = await workbench.apps.list();
+    if (mounted) {
+      apps.value = list;
+      appsLoaded.value = true;
+    }
   } catch (error) {
-    appsLoaded.value = false;
-    toast(error.message, 'error');
+    if (mounted) {
+      appsLoaded.value = false;
+      toast(error.message, 'error');
+    }
   }
 }
 
@@ -195,12 +206,14 @@ async function saveWorkflow() {
     } else {
       await workbench.workflows.create(checked.payload);
     }
+    if (!mounted) return;
     await loadData();
+    if (!mounted) return;
     showModal.value = false;
     editingWorkflow.value = null;
     toast('工作流已保存');
   } catch (error) {
-    toast(error.message, 'error');
+    if (mounted) toast(error.message, 'error');
   } finally {
     saving.value = false;
   }

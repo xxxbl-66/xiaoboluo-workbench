@@ -203,6 +203,26 @@ test('应用原路径被删除后，该步骤明确失败', async () => {
   } finally { ctx.teardown(); }
 });
 
+test('文件夹访问被拒绝时保留实际原因，不误报为路径不存在', async () => {
+  const ctx = await boot('stage2-permission-');
+  const originalStat = fs.promises.stat;
+  try {
+    const target = path.join(ctx.workRoot, '无权限文件夹');
+    const workflow = await ctx.invoke('workflows:create', { name: '权限检查', steps: [{ id: 'f', type: 'file', path: target }] });
+    fs.promises.stat = async (value) => {
+      if (value === target) throw Object.assign(new Error('拒绝访问'), { code: 'EACCES' });
+      return originalStat(value);
+    };
+    const result = await ctx.invoke('workflows:run-detailed', workflow.id);
+    assert.equal(result.failedCount, 1);
+    assert.match(result.steps[0].error, /拒绝访问/);
+    assert.doesNotMatch(result.steps[0].error, /不存在/);
+  } finally {
+    fs.promises.stat = originalStat;
+    ctx.teardown();
+  }
+});
+
 test('文件与文件夹选择 IPC 保留中文空格路径并在取消时返回 null', async () => {
   const ctx = await boot('stage2-picker-');
   try {

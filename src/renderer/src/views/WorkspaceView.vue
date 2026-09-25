@@ -174,7 +174,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import LineIcon from '../components/LineIcon.vue';
 import TodoPanel from '../components/TodoPanel.vue';
 import GoalPanel from '../components/GoalPanel.vue';
@@ -211,6 +211,7 @@ const resuming = ref(false);
 const resumeFeedback = ref(null);
 const resumeNotice = ref('');
 const resumeWorkspaceId = ref(null);
+let mounted = true;
 const ending = ref(false);
 const showEndModal = ref(false);
 const sessionTodos = ref([]);
@@ -442,16 +443,16 @@ async function resumeLastWork() {
       startSession,
       runDetailed: workbench.workflows.runDetailed,
       onStarted: async () => {
-        if (current.value?.id === workspaceId) resumeNotice.value = '工作已开始，正在计时；正在打开工作环境…';
-        await loadWorkspaces();
+        if (mounted && current.value?.id === workspaceId) resumeNotice.value = '工作已开始，正在计时；正在打开工作环境…';
+        if (mounted) await loadWorkspaces();
       }
     });
-    if (current.value?.id === workspaceId) {
+    if (mounted && current.value?.id === workspaceId) {
       resumeNotice.value = result.notice;
       resumeFeedback.value = result.feedback;
     }
   } catch (error) {
-    if (current.value?.id === workspaceId) resumeNotice.value = `开始工作失败：${error.message || '未知错误'}`;
+    if (mounted && current.value?.id === workspaceId) resumeNotice.value = `开始工作失败：${error.message || '未知错误'}`;
   } finally {
     resuming.value = false;
   }
@@ -476,9 +477,12 @@ watch(showArchived, () => {
 onMounted(() => {
   loadWorkspaces();
   loadWorkflows();
-});</script>
+});
+onBeforeUnmount(() => { mounted = false; });
+</script>
 
 <style scoped>
+.ws-resume-feedback > p { margin: 0; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-muted); font-size: 12px; }
 .workspace-view {
   display: flex;
   flex-direction: column;
