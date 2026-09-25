@@ -75,6 +75,7 @@
           <div>
             <span>累计工作时长</span>
             <strong>{{ formatDuration(current.totalSeconds || 0) }}</strong>
+            <small class="ws-overview__hint">按工作开始日期统计</small>
           </div>
           <div>
             <span>最近一次工作</span>
@@ -98,6 +99,18 @@
         :busy="resuming"
         @resume="resumeLastWork"
       />
+
+      <section class="ws-section">
+        <div class="ws-section__head">
+          <h2>工作历史</h2>
+          <p>这个工作空间的历史工作记录、备注与下一步；时长可以人工校正。</p>
+        </div>
+        <WorkspaceSessionHistory
+          ref="sessionHistoryRef"
+          :workspace-id="current.id"
+          :workspace-name="current.name"
+        />
+      </section>
 
       <section class="ws-section">
         <div class="ws-section__head">
@@ -167,6 +180,7 @@ import WorkspaceResources from '../components/WorkspaceResources.vue';
 import WorkSessionPanel from '../components/WorkSessionPanel.vue';
 import ResumeWorkCard from '../components/ResumeWorkCard.vue';
 import WorkspaceWorkflows from '../components/WorkspaceWorkflows.vue';
+import WorkspaceSessionHistory from '../components/WorkspaceSessionHistory.vue';
 import EndSessionModal from '../components/EndSessionModal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { useWorkspace } from '../composables/useWorkspace.js';
@@ -192,6 +206,18 @@ const ending = ref(false);
 const showEndModal = ref(false);
 const sessionTodos = ref([]);
 const lastSession = ref(null);
+const sessionHistoryRef = ref(null);
+
+async function reloadSessionHistory() {
+  const target = sessionHistoryRef.value;
+  if (target && typeof target.reload === 'function') {
+    try {
+      await target.reload();
+    } catch (_) {
+      // 历史刷新失败不影响主流程
+    }
+  }
+}
 
 const workspaces = computed(() => workspaceList.value);
 const current = computed(() => (
@@ -352,6 +378,7 @@ async function finishWork(payload) {
     showEndModal.value = false;
     toast('本次工作已保存');
     await loadWorkspaces();
+    await reloadSessionHistory();
   } catch (error) {
     toast(error.message, 'error');
   } finally {
@@ -513,6 +540,13 @@ onMounted(() => {
 .ws-overview__stats strong {
   font-size: 20px;
   color: var(--text);
+}
+
+.ws-overview__hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 .ws-section {

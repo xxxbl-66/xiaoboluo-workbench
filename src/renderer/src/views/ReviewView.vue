@@ -34,6 +34,7 @@
       <div class="review-work-foot">
         <span>今日完成 {{ workSummary.completedTodoCount }} 项任务</span>
         <span v-if="workSummary.activeSessionCount">· 有 {{ workSummary.activeSessionCount }} 次工作还在进行中</span>
+        <span>· 工作时长按工作开始日期统计</span>
       </div>
     </section>
 
@@ -404,7 +405,7 @@ onBeforeUnmount(() => {
 
 .review-save-error {
   margin: 8px 0 0;
-  color: var(--danger, #dc2626);
+  color: var(--danger);
   font-size: 12px;
   line-height: 1.6;
 }
