@@ -72,8 +72,8 @@
 
 前往 [Releases](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/latest) 下载最新版本：
 
-- **安装包**：[四一四工作台_安装版.exe](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.3/%E5%9B%9B%E4%B8%80%E5%9B%9B%E5%B7%A5%E4%BD%9C%E5%8F%B0_%E5%AE%89%E8%A3%85%E7%89%88.exe)
-- **便携版**：[四一四工作台_便携版.exe](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.3/%E5%9B%9B%E4%B8%80%E5%9B%9B%E5%B7%A5%E4%BD%9C%E5%8F%B0_%E4%BE%BF%E6%90%BA%E7%89%88.exe)
+- **安装包**：[四一四工作台安装版](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.3/414-Workbench-v0.1.3-Setup-x64.exe)
+- **便携版**：[四一四工作台便携版](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.3/414-Workbench-v0.1.3-Portable-x64.exe)
 
 便携版无需安装，直接运行即可。安装包支持选择安装目录，并会创建桌面和开始菜单快捷方式。
 
