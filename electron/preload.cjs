@@ -104,7 +104,8 @@ const api = {
     update: (workflowId, patch) => invoke('workflows:update', workflowId, patch),
     remove: (workflowId) => invoke('workflows:delete', workflowId),
     reorder: (orderedIds) => invoke('workflows:reorder', orderedIds),
-    run: (workflowId) => invoke('workflows:run', workflowId)
+    run: (workflowId) => invoke('workflows:run', workflowId),
+    runDetailed: (workflowId) => invoke('workflows:run-detailed', workflowId)
   },
   checkins: {
     get: () => invoke('checkins:get'),

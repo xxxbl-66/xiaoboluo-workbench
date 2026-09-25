@@ -1081,6 +1081,11 @@ function registerIpc() {
     }
     return result;
   });
+  safeHandle('workflows:run-detailed', async (workflowId) => {
+    const result = await launcherService.runWorkflow(store, workflowId);
+    if (!result.steps) throw new Error(result.error || '工作流执行失败');
+    return result;
+  });
 
   safeHandle('checkins:get', () => {
     const dates = readCheckins();

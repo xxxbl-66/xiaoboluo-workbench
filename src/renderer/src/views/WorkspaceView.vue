@@ -88,7 +88,7 @@
         :workspace-id="current.id"
         :workspace-name="current.name"
         :active-workspace-name="activeWorkspaceName"
-        :busy="starting"
+        :busy="starting || resuming"
         @start="startWork"
         @end="openEndModal"
         @go-active="goActiveWorkspace"
@@ -96,9 +96,13 @@
 
       <ResumeWorkCard
         :session="lastSession"
-        :busy="resuming"
+        :busy="resuming || starting"
         @resume="resumeLastWork"
       />
+      <div v-if="resumeWorkspaceId === current.id" class="ws-resume-feedback">
+        <p v-if="resumeNotice" role="status">{{ resumeNotice }}</p>
+        <WorkflowRunResult v-if="resumeFeedback" :result="resumeFeedback.result" :error="resumeFeedback.error" :workflow-name="resumeFeedback.name" @close="resumeFeedback = null" />
+      </div>
 
       <section class="ws-section">
         <div class="ws-section__head">
@@ -145,7 +149,7 @@
           <h2>工作流</h2>
           <p>绑定这个工作空间会用到的工作流；「继续上次工作」最多自动运行一个。</p>
         </div>
-        <WorkspaceWorkflows :workspace="current" :workflows="workflows" />
+        <WorkspaceWorkflows :workspace="current" :workflows="workflows" :busy="resuming" />
       </section>
     </template>
 
@@ -180,6 +184,7 @@ import WorkspaceResources from '../components/WorkspaceResources.vue';
 import WorkSessionPanel from '../components/WorkSessionPanel.vue';
 import ResumeWorkCard from '../components/ResumeWorkCard.vue';
 import WorkspaceWorkflows from '../components/WorkspaceWorkflows.vue';
+import WorkflowRunResult from '../components/WorkflowRunResult.vue';
 import WorkspaceSessionHistory from '../components/WorkspaceSessionHistory.vue';
 import EndSessionModal from '../components/EndSessionModal.vue';
 import { workbench } from '../composables/useWorkbench.js';
@@ -187,6 +192,7 @@ import { useWorkspace } from '../composables/useWorkspace.js';
 import { useWorkSession } from '../composables/useWorkSession.js';
 import { toast } from '../composables/toast.js';
 import { formatDuration, formatRelative } from '../utils/duration.js';
+import { resumeWorkspaceWorkflow } from '../utils/workflow-resume.mjs';
 
 defineProps({
   settings: { type: Object, default: () => ({}) }
@@ -202,6 +208,9 @@ const editing = ref(null);
 const workflows = ref([]);
 const starting = ref(false);
 const resuming = ref(false);
+const resumeFeedback = ref(null);
+const resumeNotice = ref('');
+const resumeWorkspaceId = ref(null);
 const ending = ref(false);
 const showEndModal = ref(false);
 const sessionTodos = ref([]);
@@ -349,7 +358,7 @@ async function loadSessionTodos() {
 }
 
 async function startWork() {
-  if (!current.value) return;
+  if (!current.value || starting.value || resuming.value) return;
   starting.value = true;
   try {
     const result = await startSession(current.value.id);
@@ -419,37 +428,40 @@ async function loadLastSession() {
  * 4) 工作流失败不回滚会话，只提示"部分工作环境未能打开"
  */
 async function resumeLastWork() {
-  if (!current.value) return;
+  if (!current.value || resuming.value || starting.value) return;
+  const workspace = current.value;
+  const workspaceId = workspace.id;
   resuming.value = true;
+  resumeWorkspaceId.value = workspaceId;
+  resumeFeedback.value = null;
+  resumeNotice.value = '';
   try {
-    const result = await startSession(current.value.id);
-    if (result && result.started === false) {
-      toast('已有正在进行的工作，请先结束或返回那一项', 'error');
-      return;
-    }
-
-    toast('已开始工作，计时中');
-
-    const resumeId = current.value.resumeWorkflowId;
-    const validIds = Array.isArray(current.value.workflowIds) ? current.value.workflowIds : [];
-    const valid = resumeId && validIds.includes(resumeId) && workflows.value.some((item) => item.id === resumeId);
-
-    if (valid) {
-      try {
-        await workbench.workflows.run(resumeId);
-        toast('工作环境已恢复');
+    const result = await resumeWorkspaceWorkflow({
+      workspace,
+      workflows: workflows.value,
+      startSession,
+      runDetailed: workbench.workflows.runDetailed,
+      onStarted: async () => {
+        if (current.value?.id === workspaceId) resumeNotice.value = '工作已开始，正在计时；正在打开工作环境…';
         await loadWorkspaces();
-      } catch (error) {
-        // 会话保持工作状态，用户可以继续手动工作
-        toast(`工作已开始，但部分工作环境未能打开：${error.message || '执行失败'}`, 'error');
       }
+    });
+    if (current.value?.id === workspaceId) {
+      resumeNotice.value = result.notice;
+      resumeFeedback.value = result.feedback;
     }
   } catch (error) {
-    toast(error.message, 'error');
+    if (current.value?.id === workspaceId) resumeNotice.value = `开始工作失败：${error.message || '未知错误'}`;
   } finally {
     resuming.value = false;
   }
 }
+
+watch(activeWorkspaceId, () => {
+  resumeFeedback.value = null;
+  resumeNotice.value = '';
+  resumeWorkspaceId.value = null;
+});
 
 // 进入详情时刷新一次，保证计数与最近工作信息是最新的
 watch(activeWorkspaceId, (value) => {

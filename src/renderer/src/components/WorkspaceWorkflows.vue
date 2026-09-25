@@ -16,7 +16,7 @@
         <span v-if="workflow.id === workspace.resumeWorkflowId" class="ws-workflows__badge">
           继续工作时运行
         </span>
-        <button class="ghost small" type="button" :disabled="running === workflow.id" @click="run(workflow)">
+        <button class="ghost small" type="button" :disabled="Boolean(running) || busy" @click="run(workflow)">
           <LineIcon name="play" :size="13" />
           {{ running === workflow.id ? '运行中…' : '运行' }}
         </button>
@@ -24,25 +24,32 @@
     </ul>
 
     <p v-if="missingIds.length" class="ws-workflows__warn">
-      有 {{ missingIds.length }} 个已绑定的工作流已被删除，已自动忽略。
+      有 {{ missingIds.length }} 个已绑定的工作流已被删除。{{ missingIds.includes(workspace.resumeWorkflowId) ? '默认工作流已失效，请编辑工作空间重新选择。' : '请编辑工作空间移除失效绑定。' }}
     </p>
+    <p v-if="running" role="status">工作流正在按顺序执行…</p>
+    <WorkflowRunResult v-if="feedback" :result="feedback.result" :error="feedback.error" :workflow-name="feedback.name" @close="feedback = null" />
   </section>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import LineIcon from './LineIcon.vue';
+import WorkflowRunResult from './WorkflowRunResult.vue';
 import { workbench } from '../composables/useWorkbench.js';
-import { toast } from '../composables/toast.js';
 
 const props = defineProps({
   workspace: { type: Object, required: true },
-  workflows: { type: Array, default: () => [] }
+  workflows: { type: Array, default: () => [] },
+  busy: { type: Boolean, default: false }
 });
 
 defineEmits(['changed']);
 
 const running = ref(null);
+const feedback = ref(null);
+let mounted = true;
+watch(() => props.workspace.id, () => { feedback.value = null; });
+onBeforeUnmount(() => { mounted = false; });
 
 const ids = computed(() => (Array.isArray(props.workspace.workflowIds) ? props.workspace.workflowIds : []));
 /** 容错：忽略已经被删除的工作流 id */
@@ -64,12 +71,15 @@ function stepSummary(workflow) {
 }
 
 async function run(workflow) {
+  if (running.value || props.busy) return;
+  const workspaceId = props.workspace.id;
   running.value = workflow.id;
+  feedback.value = null;
   try {
-    await workbench.workflows.run(workflow.id);
-    toast(`已运行「${workflow.name}」`);
+    const result = await workbench.workflows.runDetailed(workflow.id);
+    if (mounted && props.workspace.id === workspaceId) feedback.value = { name: workflow.name, result, error: '' };
   } catch (error) {
-    toast(error.message || '工作流执行失败', 'error');
+    if (mounted && props.workspace.id === workspaceId) feedback.value = { name: workflow.name, result: null, error: error.message || '工作流执行失败' };
   } finally {
     running.value = null;
   }

@@ -1,5 +1,7 @@
 const { shell } = require('electron');
 const { id } = require('../defaults.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
 
 function readWorkflows(store) {
   return store.read('workflows.json', []);
@@ -55,7 +57,10 @@ async function openExternal(url) {
     return { ok: false, error: '只支持打开 http 或 https 链接' };
   }
   try {
-    await shell.openExternal(url);
+    const response = await shell.openExternal(url.trim());
+    if (response && (typeof response === 'string' || response.ok === false)) {
+      return { ok: false, error: typeof response === 'string' ? response : (response.error || '打开链接失败') };
+    }
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error.message || '打开链接失败' };
@@ -66,30 +71,82 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const runningWorkflowIds = new Set();
+
 async function runWorkflow(store, workflowId) {
+  if (typeof workflowId !== 'string' || !workflowId.trim()) throw new Error('工作流 ID 无效');
   const workflows = readWorkflows(store);
   const workflow = workflows.find((item) => item.id === workflowId);
   if (!workflow) return { ok: false, error: '工作流不存在' };
+  if (!Array.isArray(workflow.steps)) throw new Error('工作流步骤数据损坏');
+  if (!workflow.steps.length) throw new Error('工作流没有可执行步骤');
+  if (runningWorkflowIds.has(workflowId)) throw new Error('工作流正在运行，请等待本次执行完成');
+  runningWorkflowIds.add(workflowId);
 
+  try {
   const results = [];
-  for (const step of workflow.steps || []) {
-    if (step.type === 'app') {
-      results.push({ step: step.id, result: await launchApp(store, step.appId) });
-    } else if (step.type === 'file') {
-      results.push({ step: step.id, result: await openPath(step.path) });
-    } else if (step.type === 'url') {
-      // 必须 await：openExternal 是异步的，漏掉 await 会把 Promise 写进结果，
-      // 既让失败检查失效，也会在 IPC 序列化时出错。
-      results.push({ step: step.id, result: await openExternal(step.url) });
+  const steps = [];
+  for (const [index, step] of workflow.steps.entries()) {
+    const type = step && typeof step.type === 'string' ? step.type : 'unknown';
+    let label = `第 ${index + 1} 步`;
+    let result;
+    try {
+      if (type === 'app') {
+        const app = readApps(store).find((item) => item.id === step.appId);
+        label = app?.name || '未找到的应用';
+        if (!step.appId) result = { ok: false, error: '尚未选择应用' };
+        else if (!app) result = { ok: false, error: '应用不存在' };
+        else if (typeof app.path !== 'string' || !app.path) result = { ok: false, error: '应用路径无效' };
+        else {
+          try {
+            await fs.promises.stat(app.path);
+            result = await launchApp(store, step.appId);
+          } catch (error) {
+            result = { ok: false, error: error.code === 'ENOENT' ? '应用路径不存在' : (error.message || '无法访问应用路径') };
+          }
+        }
+      } else if (type === 'file') {
+        label = typeof step.path === 'string' && step.path ? path.basename(step.path) : '未选择的文件或文件夹';
+        if (!step.path || typeof step.path !== 'string') result = { ok: false, error: '尚未选择文件或文件夹' };
+        else {
+          try {
+            await fs.promises.stat(step.path);
+            result = await openPath(step.path);
+          } catch (error) {
+            result = { ok: false, error: error.code === 'ENOENT' ? '路径不存在' : (error.message || '无法访问路径') };
+          }
+        }
+      } else if (type === 'url') {
+        label = isSafeExternalUrl(step.url) ? new URL(step.url.trim()).hostname : '网页';
+        result = await openExternal(step.url);
+      } else {
+        result = { ok: false, error: '不支持的步骤类型' };
+      }
+    } catch (error) {
+      result = { ok: false, error: error?.message || '执行失败' };
     }
+    const plain = { ok: result?.ok === true, error: result?.ok === true ? null : String(result?.error || '执行失败') };
+    results.push({ step: step?.id || null, result: plain.ok ? { ok: true } : { ok: false, error: plain.error } });
+    steps.push({ id: step?.id || null, index, type, label, ...plain });
     await delay(350);
   }
 
-  const failed = results.find((item) => item.result && item.result.ok === false);
-  if (failed) {
-    return { ok: false, error: failed.result.error || '工作流执行失败', results };
+  const failedCount = steps.filter((item) => !item.ok).length;
+  const successCount = steps.length - failedCount;
+  return {
+    ok: failedCount === 0,
+    error: steps.find((item) => !item.ok)?.error || null,
+    workflowId,
+    workflowName: workflow.name || '未命名工作流',
+    totalCount: steps.length,
+    successCount,
+    failedCount,
+    steps,
+    results
+  };
+  } finally {
+    runningWorkflowIds.delete(workflowId);
   }
-  return { ok: true, results };
 }
 
 module.exports = {
