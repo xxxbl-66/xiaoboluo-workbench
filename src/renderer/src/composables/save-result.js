@@ -47,10 +47,13 @@ export async function runSave(run, options = {}) {
   let outcome;
   try {
     const data = await run();
-    if (!isConfirmedSave(data)) {
-      outcome = { ok: false, error: `${fallback}（主进程没有确认写入）` };
-    } else {
+    if (isConfirmedSave(data)) {
       outcome = { ok: true, error: '', data };
+    } else if (data && typeof data === 'object' && typeof data.error === 'string' && data.error.trim()) {
+      // 服务层已经给出明确原因（{ok:false, error}）：原样透出，不要吞成通用提示
+      outcome = { ok: false, error: data.error.trim() };
+    } else {
+      outcome = { ok: false, error: `${fallback}（主进程没有确认写入）` };
     }
   } catch (error) {
     outcome = { ok: false, error: describeError(error, fallback) };

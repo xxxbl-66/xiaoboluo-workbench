@@ -348,7 +348,7 @@ onMounted(async () => {
 }
 
 .user-card__error {
-  color: var(--danger, #dc2626) !important;
+  color: var(--danger) !important;
 }
 
 .danger-button {
