@@ -1,5 +1,3 @@
-const { id } = require('../defaults.cjs');
-
 /**
  * 便签服务（主进程侧）。
  *
@@ -9,6 +7,16 @@ const { id } = require('../defaults.cjs');
  */
 
 const QUICK_TITLE = '快速便签';
+
+/**
+ * 快速便签的固定 ID。
+ *
+ * 全局只有一条快速便签，用稳定 ID 而不是每次随机生成，
+ * 这样"只打开便签页、从未编辑过"的情况下读取不写盘，
+ * 也能保证反复读取返回的是同一条记录（老实现靠写盘才保持 ID 稳定）。
+ * 用户已有数据里已经存在的 quick 便签（含随机 ID）优先，不会被改写。
+ */
+const QUICK_ID = 'quick-note';
 
 /**
  * 便签内容规范化。
@@ -36,7 +44,7 @@ function readQuickNote(notes) {
   }
   const now = new Date().toISOString();
   return {
-    id: id(),
+    id: QUICK_ID,
     title: QUICK_TITLE,
     content: '',
     type: 'quick',
@@ -58,7 +66,7 @@ function applyQuickNote(notes, content, nowIso) {
 
   if (index === -1) {
     const quick = {
-      id: id(),
+      id: QUICK_ID,
       title: QUICK_TITLE,
       content: text,
       type: 'quick',
@@ -76,6 +84,7 @@ function applyQuickNote(notes, content, nowIso) {
 }
 
 module.exports = {
+  QUICK_ID,
   QUICK_TITLE,
   normalizeContent,
   findQuickNote,

@@ -116,7 +116,7 @@ onBeforeUnmount(() => {
 }
 
 .quick-note-status.error {
-  color: var(--danger, #dc2626);
+  color: var(--danger);
 }
 
 .quick-note-retry {
