@@ -194,6 +194,10 @@ test('IPC 冒烟：main.cjs 在 mock 环境下能注册全部 Workspace / Sessio
       'sessions:update',
       'sessions:summary',
       'sessions:last',
+      // 阶段一新增：受控时长校正 / 继续未结束会话 / 最小工作历史
+      'sessions:adjust-duration',
+      'sessions:resume',
+      'sessions:history',
       'system:path-exists',
       'system:path-exists-batch'
     ];
@@ -682,6 +686,127 @@ test('IPC 冒烟：继续工作相关的工作流能力（run 成功 / 失败 / 
 
     // 再次运行已删除的工作流应明确报错，而不是静默成功
     await assert.rejects(() => invoke('workflows:run', good.id), /工作流不存在/);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * 阶段一新增：校正后的时长必须贯穿"复盘 / 累计时长 / 历史 / 快照"
+ * ------------------------------------------------------------------ */
+
+test('IPC 冒烟（阶段一）：校正时长后，复盘汇总、Workspace 累计、历史与快照保持一致', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const ws = await invoke('workspaces:create', { name: '全链路项目' });
+    const todo = await invoke('todos:create', { title: '完成主流程', workspaceId: ws.id });
+
+    const started = await invoke('sessions:start', ws.id);
+    const ended = await invoke('sessions:end', started.session.id, {
+      note: '完成主要功能',
+      nextStep: '补测试',
+      completedTodoIds: [todo.id]
+    });
+
+    // 校正前：各处都使用机器计算的墙上时长
+    const summaryBefore = await invoke('sessions:summary', { dateKey: ended.dateKey });
+    assert.equal(summaryBefore.totalSeconds, ended.durationSeconds);
+    const wsBefore = (await invoke('workspaces:list', { includeArchived: true })).find((item) => item.id === ws.id);
+    assert.equal(wsBefore.totalSeconds, ended.durationSeconds);
+
+    // 受控校正
+    const adjusted = await invoke('sessions:adjust-duration', started.session.id, 2700, { reason: '实际工作时长' });
+    assert.equal(adjusted.durationSeconds, 2700);
+    assert.equal(adjusted.originalDurationSeconds, ended.durationSeconds, '原始时长必须留档');
+
+    // 校正后：四处必须一致，不允许同时存在互相矛盾的总时长
+    const summaryAfter = await invoke('sessions:summary', { dateKey: ended.dateKey });
+    assert.equal(summaryAfter.totalSeconds, 2700, '今日复盘必须使用校正后的有效时长');
+
+    const wsAfter = (await invoke('workspaces:list', { includeArchived: true })).find((item) => item.id === ws.id);
+    assert.equal(wsAfter.totalSeconds, 2700, 'Workspace 累计时长必须同步更新');
+
+    const last = await invoke('sessions:last', ws.id);
+    assert.equal(last.durationSeconds, 2700, '工作快照不能继续显示旧时长');
+
+    const history = await invoke('sessions:history', { workspaceId: ws.id });
+    assert.equal(history.length, 1);
+    assert.equal(history[0].durationSeconds, 2700);
+    assert.equal(history[0].durationAdjusted, true);
+    assert.equal(history[0].completedCount, 1);
+    assert.equal(history[0].completedTodos[0].title, '完成主流程');
+    assert.equal(history[0].note, '完成主要功能');
+    assert.equal(history[0].nextStep, '补测试');
+
+    // 单 active 规则不回归
+    const second = await invoke('sessions:start', ws.id);
+    assert.equal(second.started, true);
+    const blocked = await invoke('sessions:start', ws.id);
+    assert.equal(blocked.started, false);
+    assert.equal(blocked.reason, 'active-exists');
+    await invoke('sessions:end', second.session.id, {});
+    assert.equal(await invoke('sessions:get-active'), null);
+
+    const all = await invoke('sessions:list', { workspaceId: ws.id });
+    assert.equal(all.length, 2);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟（阶段一）：继续未结束的工作不新建记录，且会话结束的 Todo 归属校验不回归', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const wsA = await invoke('workspaces:create', { name: 'A' });
+    const wsB = await invoke('workspaces:create', { name: 'B' });
+    const todoB = await invoke('todos:create', { title: 'B 的任务', workspaceId: wsB.id });
+
+    const started = await invoke('sessions:start', wsA.id);
+    const resumed = await invoke('sessions:resume', started.session.id);
+    assert.equal(resumed.id, started.session.id);
+    assert.ok(resumed.resumedAt);
+    assert.equal((await invoke('sessions:list', {})).length, 1, '继续不能新建第二条记录');
+
+    // 归属校验不回归：B 的任务不能写进 A 的会话
+    await assert.rejects(
+      () => invoke('sessions:end', started.session.id, { completedTodoIds: [todoB.id] }),
+      /不属于/
+    );
+    const stillActive = await invoke('sessions:get-active');
+    assert.equal(stillActive.id, started.session.id, '非法结束被拒绝后会话必须仍然 active');
+
+    const ended = await invoke('sessions:end', started.session.id, { note: '正常结束' });
+    assert.ok(ended.endedAt);
+    assert.equal(ended.completedTodoIds.length, 0);
+
+    // 已结束的会话不能被重复结束覆盖
+    await assert.rejects(() => invoke('sessions:end', started.session.id, { note: '重复' }), /已经结束/);
+  } finally {
+    cleanupDir(workRoot);
+  }
+});
+
+test('IPC 冒烟（阶段一）：备份导出 / 导入在新增 Session 审计字段后仍可用', async () => {
+  const { electronMock, workRoot } = await loadMainWithMock();
+  try {
+    const invoke = makeInvoke(electronMock.__handlers);
+    const ws = await invoke('workspaces:create', { name: '备份项目' });
+    const started = await invoke('sessions:start', ws.id);
+    await invoke('sessions:end', started.session.id, { note: '待备份' });
+    await invoke('sessions:adjust-duration', started.session.id, 900, { reason: '校正后备份' });
+
+    const exported = await invoke('backup:export');
+    assert.ok(exported && exported.filePath, '备份导出必须返回文件路径');
+    assert.ok(fs.existsSync(exported.filePath), '备份文件必须真实存在');
+
+    const payload = JSON.parse(fs.readFileSync(exported.filePath, 'utf8'));
+    const data = payload.data || payload;
+    const sessions = data['work-sessions.json'];
+    assert.ok(Array.isArray(sessions), '备份必须包含 work-sessions.json');
+    assert.equal(sessions[0].durationSeconds, 900);
+    assert.equal(sessions[0].durationAdjustmentReason, '校正后备份');
   } finally {
     cleanupDir(workRoot);
   }
