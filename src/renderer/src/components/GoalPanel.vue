@@ -34,8 +34,14 @@
             {{ isTodayChecked(goal) ? '今日已打卡' : '今日打卡' }}
           </button>
           <div class="goal-actions">
-            <button class="icon-button" type="button" title="编辑" @click="openEdit(goal)">✎</button>
-            <button class="icon-button danger" type="button" title="删除" @click="removeGoal(goal)">🗑</button>
+            <button class="icon-button" type="button" title="编辑" :disabled="removingId === goal.id" @click="openEdit(goal)">✎</button>
+            <button
+              class="icon-button danger"
+              type="button"
+              :title="removingId === goal.id ? '正在删除…' : '删除'"
+              :disabled="removingId === goal.id"
+              @click="removeGoal(goal)"
+            >{{ removingId === goal.id ? '…' : '🗑' }}</button>
           </div>
         </footer>
       </article>
@@ -103,6 +109,7 @@ import { computed, onMounted, ref } from 'vue';
 import Modal from './Modal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
+import { removeGoalAndReload } from './goal-actions.js';
 
 const props = defineProps({
   /**
@@ -115,6 +122,7 @@ const props = defineProps({
 const allGoals = ref([]);
 const showModal = ref(false);
 const editingGoal = ref(null);
+const removingId = ref(null);
 const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
 const form = ref({
   title: '',
@@ -249,9 +257,36 @@ async function checkinGoal(goal) {
   }
 }
 
+/**
+ * 删除目标。
+ *
+ * 注意 goals 是只读 computed：删除成功后必须刷新真正的状态源 allGoals，
+ * 失败时不能提前把目标从界面上拿掉（P1-04）。
+ */
 async function removeGoal(goal) {
   if (!window.confirm(`确定删除目标“${goal.title}”吗？`)) return;
-  goals.value = await workbench.goals.remove(goal.id);
+  if (removingId.value) return;
+  removingId.value = goal.id;
+  try {
+    const result = await removeGoalAndReload(goal.id, {
+      remove: (goalId) => workbench.goals.remove(goalId),
+      list: () => workbench.goals.list()
+    });
+    if (!result.ok) {
+      toast(`目标删除失败：${result.error}`, 'error');
+      return;
+    }
+    if (result.reloadFailed) {
+      // 数据已删除，但列表刷新失败：以服务端列表为准，再尝试一次
+      await loadGoals();
+      toast('目标已删除，但列表刷新出现异常，请重新进入页面确认', 'error');
+      return;
+    }
+    allGoals.value = result.goals;
+    toast('目标已删除');
+  } finally {
+    removingId.value = null;
+  }
 }
 
 onMounted(loadGoals);

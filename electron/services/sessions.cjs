@@ -158,6 +158,10 @@ function assertTodosInScope(session, todos, completedTodoIds) {
 /**
  * 结束会话。
  * durationSeconds 依据 startedAt 与结束时刻的真实时间差计算，不依赖前端计时器。
+ *
+ * 已结束的会话不能被普通 end 再次覆盖：否则异常重启后的"保留并退出"流程里，
+ * 一次误调用就能把用户校正过的有效时长重新改回虚高的墙上时间。
+ * 需要修正已结束记录请使用 adjustSessionDuration（有界、可审计）。
  */
 function endSession(store, sessionId, patch = {}) {
   const items = readSessions(store);
@@ -165,6 +169,10 @@ function endSession(store, sessionId, patch = {}) {
   if (index === -1) throw new Error('工作记录不存在');
 
   const session = items[index];
+  if (!isActive(session)) {
+    throw new Error('这次工作已经结束，无需重复结束');
+  }
+
   const now = new Date();
   const iso = now.toISOString();
   const duration = elapsedSeconds(session.startedAt, iso);
@@ -177,6 +185,37 @@ function endSession(store, sessionId, patch = {}) {
     note: patch.note === undefined ? String(session.note || '') : String(patch.note || ''),
     nextStep: patch.nextStep === undefined ? String(session.nextStep || '') : String(patch.nextStep || ''),
     completedTodoIds: todoIds || (Array.isArray(session.completedTodoIds) ? session.completedTodoIds : []),
+    updatedAt: iso
+  };
+
+  items[index] = next;
+  writeSessions(store, items);
+  return next;
+}
+
+/**
+ * 用户明确选择"继续这段未结束的工作"。
+ *
+ * 只记录一次 resumedAt 作为审计痕迹，不新建会话、不修改 startedAt。
+ * 离线期间无法判断用户是否真的在工作，因此计时仍以 startedAt 为准，
+ * UI 必须明确告知这一点（不得声称系统能自动识别离开电脑的时间）。
+ */
+function resumeSession(store, sessionId) {
+  const items = readSessions(store);
+  const index = items.findIndex((item) => item.id === sessionId);
+  if (index === -1) throw new Error('工作记录不存在');
+
+  const session = items[index];
+  if (!isActive(session)) {
+    throw new Error('这段工作已经结束，不需要继续');
+  }
+
+  const iso = new Date().toISOString();
+  const next = {
+    ...session,
+    resumedAt: iso,
+    // 首次继续时才写，保留"第一次发现它未结束"的时间线索
+    resumeCount: Math.max(0, Math.round(Number(session.resumeCount) || 0)) + 1,
     updatedAt: iso
   };
 
@@ -301,10 +340,126 @@ function totalsByWorkspace(store) {
   return totals;
 }
 
+/* ------------------------------------------------------------------ *
+ * 有效工作时长校正（P1-01）
+ *
+ * 产品规则：用户可能忘记结束工作，或应用异常退出导致时长包含离线时段。
+ * 本轮只校正"有效工作时长"，不开发计时区间编辑器，也不引入暂停状态机。
+ *
+ * 安全规则（全部在服务层强制，UI 只是第一道提示）：
+ * - 只有已结束的会话可以校正（active 会话必须先正常结束）
+ * - 时长必须是有限、非负、不超过 MAX_ADJUSTABLE_SECONDS 的整数
+ * - 拒绝 NaN / Infinity / 负数 / 非数字字符串 / 数组 / 对象
+ * - 校正接口只写 durationSeconds 与审计字段，
+ *   绝不允许改 workspaceId、completedTodoIds、startedAt、endedAt、dateKey
+ * ------------------------------------------------------------------ */
+
+/** 单次工作的合理上限：7 天。超过几乎一定是误输入或跨设备时间错误 */
+const MAX_ADJUSTABLE_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * 校验用户输入的有效工作时长。
+ * @returns {{ok:true, seconds:number} | {ok:false, error:string}}
+ */
+function validateDurationSeconds(value) {
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return { ok: false, error: '工作时长不能是 NaN' };
+    if (!Number.isFinite(value)) return { ok: false, error: '工作时长必须是有限的数字' };
+  } else if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return { ok: false, error: '请输入有效的工作时长' };
+    if (!/^\d+$/.test(text)) {
+      return { ok: false, error: '工作时长必须是非负整数（秒）' };
+    }
+  } else {
+    return { ok: false, error: '工作时长必须是数字' };
+  }
+
+  const seconds = Math.round(Number(value));
+  if (!Number.isFinite(seconds)) return { ok: false, error: '工作时长必须是有限的数字' };
+  if (seconds < 0) return { ok: false, error: '工作时长不能为负数' };
+  if (seconds > MAX_ADJUSTABLE_SECONDS) {
+    return { ok: false, error: `工作时长不能超过 ${Math.round(MAX_ADJUSTABLE_SECONDS / 3600)} 小时` };
+  }
+  return { ok: true, seconds };
+}
+
+/**
+ * 校正一个【已结束】会话的有效工作时长，并保留可追踪的校正记录。
+ *
+ * 审计字段（全部可选，老记录没有也能正常读取）：
+ * - durationAdjustedAt：本次校正时间
+ * - durationAdjustmentReason：用户填写的说明（可选）
+ * - originalDurationSeconds：首次校正前的机器计算时长（只写一次）
+ * - previousDurationSeconds：上一次被覆盖掉的时长（重复校正时可追踪）
+ * - durationAdjustmentCount：累计校正次数
+ * - durationAdjustedBy：固定为 'user'，方便将来区分系统自动校正
+ *
+ * startedAt / endedAt / workspaceId / completedTodoIds / dateKey 一律不动：
+ * 校正只表达"这段时间里有效工作多久"，不改变归属和归属日期。
+ */
+function adjustSessionDuration(store, sessionId, seconds, options = {}) {
+  const checked = validateDurationSeconds(seconds);
+  if (!checked.ok) throw new Error(checked.error);
+
+  const items = readSessions(store);
+  const index = items.findIndex((item) => item.id === sessionId);
+  if (index === -1) throw new Error('工作记录不存在');
+
+  const session = items[index];
+  if (isActive(session)) {
+    throw new Error('这次工作还没有结束，请先结束再校正时长');
+  }
+
+  const now = new Date();
+  const iso = now.toISOString();
+  const previous = Math.max(0, Math.round(Number(session.durationSeconds) || 0));
+  const reason = options.reason === undefined || options.reason === null
+    ? ''
+    : String(options.reason).slice(0, 200);
+  const count = Math.max(0, Math.round(Number(session.durationAdjustmentCount) || 0)) + 1;
+  const original = Number.isFinite(Number(session.originalDurationSeconds))
+    ? Math.max(0, Math.round(Number(session.originalDurationSeconds)))
+    : previous;
+
+  const next = {
+    ...session,
+    // 只允许改这一个业务字段 + 审计字段
+    durationSeconds: checked.seconds,
+    originalDurationSeconds: original,
+    previousDurationSeconds: previous,
+    durationAdjustmentCount: count,
+    durationAdjustedAt: iso,
+    durationAdjustmentReason: reason,
+    durationAdjustedBy: 'user',
+    updatedAt: iso
+  };
+
+  // 显式钉住不允许被校正接口改动的字段
+  next.id = session.id;
+  next.workspaceId = session.workspaceId;
+  next.startedAt = session.startedAt;
+  next.endedAt = session.endedAt;
+  next.dateKey = session.dateKey;
+  next.completedTodoIds = Array.isArray(session.completedTodoIds) ? session.completedTodoIds : [];
+
+  items[index] = next;
+  writeSessions(store, items);
+  return next;
+}
+
+/** 会话是否发生过时长校正（老记录没有这些字段时为 false） */
+function wasDurationAdjusted(session) {
+  if (!session) return false;
+  if (Number(session.durationAdjustmentCount) > 0) return true;
+  return Boolean(session.durationAdjustedAt);
+}
+
 module.exports = {
   FILE,
   DEFAULT_LIMIT,
   MAX_LIMIT,
+  MAX_ADJUSTABLE_SECONDS,
   isActive,
   readSessions,
   writeSessions,
@@ -313,10 +468,14 @@ module.exports = {
   findSession,
   startSession,
   endSession,
+  resumeSession,
   updateSession,
   deleteSession,
   lastFinishedSession,
   summarizeSessions,
   totalsByWorkspace,
-  assertTodosInScope
+  assertTodosInScope,
+  validateDurationSeconds,
+  adjustSessionDuration,
+  wasDurationAdjusted
 };

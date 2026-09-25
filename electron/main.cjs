@@ -5,6 +5,7 @@ const { DataStore } = require('./store.cjs');
 const { defaultSettings, id } = require('./defaults.cjs');
 const appService = require('./services/apps.cjs');
 const fileService = require('./services/files.cjs');
+const noteService = require('./services/notes.cjs');
 const launcherService = require('./services/launcher.cjs');
 const backupService = require('./services/backup.cjs');
 const migrations = require('./migrations.cjs');
@@ -188,43 +189,19 @@ function writeTodos(items) {
   store.write('todos.json', items);
 }
 
+/**
+ * 快速便签。
+ *
+ * 结构决定权在 electron/services/notes.cjs（可被测试直接覆盖）：
+ * - 读取不写盘（避免只打开页面就改动 notes.json）
+ * - 空字符串是合法内容，与"没有变化"是两件事
+ */
 function getQuickNote() {
-  const notes = fileService.readNotes(store);
-  let quick = notes.find((item) => item.type === 'quick');
-  if (!quick) {
-    quick = {
-      id: id(),
-      title: '快速便签',
-      content: '',
-      type: 'quick',
-      pinned: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    notes.unshift(quick);
-    fileService.writeNotes(store, notes);
-  }
-  return quick;
+  return noteService.readQuickNote(fileService.readNotes(store));
 }
 
 function saveQuickNote(content) {
-  const notes = fileService.readNotes(store);
-  let quick = notes.find((item) => item.type === 'quick');
-  if (!quick) {
-    quick = {
-      id: id(),
-      title: '快速便签',
-      content: String(content || ''),
-      type: 'quick',
-      pinned: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    notes.unshift(quick);
-  } else {
-    quick.content = String(content || '');
-    quick.updatedAt = new Date().toISOString();
-  }
+  const { notes, quick } = noteService.applyQuickNote(fileService.readNotes(store), content);
   fileService.writeNotes(store, notes);
   return quick;
 }
@@ -685,6 +662,11 @@ function readBookFile(book) {
 }
 
 function registerIpc() {
+  // 关闭确认的回执通道：渲染层在确认界面里选择"返回工作 / 结束工作 / 保留会话并退出"
+  ipcMain.on('sessions:close-response', (_event, payload) => {
+    handleCloseResponse(payload);
+  });
+
   safeHandle('app:info', () => ({
     version: app.getVersion(),
     dataDir: store.baseDir,
@@ -1385,6 +1367,71 @@ function registerIpc() {
     return sessionService.updateSession(store, sessionId, patch || {});
   });
 
+  /**
+   * 受控的有效工作时长校正。
+   *
+   * 只对已结束的会话生效，服务层校验有限性/范围，
+   * 并把"校正前时长、原始时长、校正时间、说明"一并留档。
+   * 不允许通过这个通道改 workspaceId / completedTodoIds / startedAt。
+   */
+  safeHandle('sessions:adjust-duration', (sessionId, seconds, options) => {
+    const session = sessionService.findSession(store, sessionId);
+    if (!session) throw new Error('工作记录不存在');
+    return sessionService.adjustSessionDuration(store, sessionId, seconds, options || {});
+  });
+
+  /** 异常重启后用户选择"继续这段工作"：只留审计痕迹，不新建会话 */
+  safeHandle('sessions:resume', (sessionId) => {
+    const session = sessionService.findSession(store, sessionId);
+    if (!session) throw new Error('工作记录不存在');
+    return sessionService.resumeSession(store, sessionId);
+  });
+
+  /**
+   * 某个 Workspace 的工作历史（最小历史入口）。
+   *
+   * - 只返回该 Workspace 自己的会话，不泄露其他空间内容
+   * - 默认只取最近若干条，支持 limit 分页（"查看更多"）
+   * - 归档 Workspace 的历史同样可查
+   * - 补齐完成事项标题；Todo 已被删除时明确标记，不让历史凭空消失
+   */
+  safeHandle('sessions:history', (options) => {
+    const opts = options || {};
+    const workspaceId = workspaceService.normalizeWorkspaceId(opts.workspaceId);
+    if (!workspaceId) throw new Error('缺少工作空间信息');
+
+    const todos = readTodos();
+    const todoById = new Map(
+      todos.filter((todo) => todo && todo.id).map((todo) => [todo.id, todo])
+    );
+
+    const sessions = sessionService.listSessions(store, {
+      workspaceId,
+      limit: opts.limit,
+      dateKey: opts.dateKey,
+      from: opts.from,
+      to: opts.to
+    }).filter((item) => !sessionService.isActive(item));
+
+    return sessions.map((session) => {
+      const ids = Array.isArray(session.completedTodoIds) ? session.completedTodoIds : [];
+      const completedTodos = ids.map((todoId) => {
+        const todo = todoById.get(todoId);
+        return {
+          id: todoId,
+          title: todo ? todo.title : '（原任务已删除）',
+          missing: !todo
+        };
+      });
+      return {
+        ...session,
+        completedTodos,
+        completedCount: completedTodos.length,
+        durationAdjusted: sessionService.wasDurationAdjusted(session)
+      };
+    });
+  });
+
   safeHandle('sessions:delete', (sessionId) => sessionService.deleteSession(store, sessionId));
   safeHandle('sessions:summary', (options) => sessionService.summarizeSessions(store, options || {}));
 
@@ -1568,6 +1615,94 @@ function detachWorkspaceResources(workspaceId) {
   return count;
 }
 
+/* ------------------------------------------------------------------ *
+ * 关闭窗口时的"未结束工作"确认（P1-01）
+ *
+ * 设计要点：
+ * - 主进程先查有没有 active Session，没有就完全不介入，正常关闭
+ * - 有 active Session 时 preventDefault()，把决策交给渲染层的确认界面
+ * - 用一个挂起的 Promise 而不是事件循环阻塞：不会卡死关闭流程
+ * - pendingCloseResolve 保证同一时间只有一个确认框；渲染层没有响应时
+ *   3 秒后按"保留会话并退出"放行，绝不出现关不掉的情况
+ * - forceQuit 为 true 时直接放行，避免 close → preventDefault 死循环
+ * ------------------------------------------------------------------ */
+
+const CLOSE_DECISION_TIMEOUT_MS = 3000;
+
+let forceQuit = false;
+let closeDecisionPending = false;
+let closeDecisionTimer = null;
+let pendingCloseResolve = null;
+
+function resolveCloseDecision(action) {
+  if (closeDecisionTimer) {
+    clearTimeout(closeDecisionTimer);
+    closeDecisionTimer = null;
+  }
+  const resolve = pendingCloseResolve;
+  pendingCloseResolve = null;
+  closeDecisionPending = false;
+  if (resolve) resolve(action || 'exit');
+}
+
+/** 渲染层在确认界面里做出的选择 */
+function handleCloseResponse(payload) {
+  const action = payload && typeof payload.action === 'string' ? payload.action : 'exit';
+  resolveCloseDecision(action);
+}
+
+/**
+ * @returns {Promise<'exit'|'cancel'>} exit = 允许窗口关闭；cancel = 保持窗口
+ */
+function askRendererAboutActiveSession() {
+  if (closeDecisionPending) return Promise.resolve('exit');
+  const target = mainWindow;
+  if (!target || target.isDestroyed()) return Promise.resolve('exit');
+
+  closeDecisionPending = true;
+  return new Promise((resolve) => {
+    pendingCloseResolve = resolve;
+    closeDecisionTimer = setTimeout(() => {
+      // 渲染层异常/卡住时的安全兜底：保留会话并退出，不能把应用卡在"关不掉"的状态
+      console.error('[close] 渲染层未在期限内回应关闭确认，按"保留会话并退出"处理');
+      resolveCloseDecision('exit');
+    }, CLOSE_DECISION_TIMEOUT_MS);
+    if (typeof closeDecisionTimer.unref === 'function') closeDecisionTimer.unref();
+    try {
+      target.webContents.send('sessions:close-request');
+    } catch (error) {
+      console.error('[close] 无法通知渲染层关闭确认：', error && error.message);
+      resolveCloseDecision('exit');
+    }
+  });
+}
+
+/**
+ * 窗口关闭前的统一入口。
+ * 返回 true 表示"这次关闭已经被拦下，等用户决定"。
+ */
+function handleWindowClose(event) {
+  if (forceQuit) return false;
+
+  let session = null;
+  try {
+    session = sessionService.getActiveSession(store);
+  } catch (error) {
+    console.error('[close] 读取进行中的工作时出错：', error && error.message);
+    return false;
+  }
+  if (!session) return false;
+
+  event.preventDefault();
+  askRendererAboutActiveSession().then((action) => {
+    if (action === 'cancel') return;
+    // 结束工作由渲染层走现有 sessions:end 流程；这里只负责放行关闭
+    forceQuit = true;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  });
+  return true;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -1609,8 +1744,14 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'renderer', 'index.html'));
   }
 
+  mainWindow.on('close', (event) => {
+    handleWindowClose(event);
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // 窗口已经真的关了：清掉可能残留的确认状态
+    resolveCloseDecision('exit');
   });
 
   // 第二次启动发生在窗口建好之前时，这里补一次聚焦

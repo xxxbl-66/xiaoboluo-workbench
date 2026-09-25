@@ -74,7 +74,10 @@
         <textarea v-model="record.answers.whatImprove" placeholder="下一步最小改进动作…" @input="scheduleSave"></textarea>
       </div>
 
-      <button class="review-save-button" type="button" @click="saveToday">保存今日复盘</button>
+      <button class="review-save-button" type="button" :disabled="saving" @click="saveToday">
+        {{ saving ? '保存中…' : '保存今日复盘' }}
+      </button>
+      <p v-if="saveError" class="review-save-error">{{ saveError }} —— 内容仍保留在本页，可以重新点击保存。</p>
     </section>
 
     <section class="panel review-history">
@@ -106,6 +109,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
+import { runSave } from '../composables/save-result.js';
 import { formatDuration } from '../utils/duration.js';
 
 const todos = ref([]);
@@ -117,6 +121,8 @@ const record = ref({
   focusMinutes: 0,
   answers: { whatDid: '', whatLearned: '', whatImprove: '' }
 });
+const saving = ref(false);
+const saveError = ref('');
 let saveTimer = null;
 
 const today = new Date();
@@ -200,12 +206,20 @@ function scheduleSave() {
 async function saveMetrics() {
   record.value.readingMinutes = Number(record.value.readingMinutes) || 0;
   record.value.focusMinutes = Number(record.value.focusMinutes) || 0;
-  await saveReview();
+  const outcome = await saveReview({ silent: true });
+  if (!outcome.ok) toast(outcome.error, 'error');
+  else toast('阅读／专注时长已保存');
 }
 
+/**
+ * 真实保存复盘。
+ *
+ * 返回 {ok,error} 而不是 null：上层必须据此决定是否提示成功。
+ * 失败时【不修改 record】，用户已输入的内容留在页面上可以重试。
+ */
 async function saveReview() {
-  try {
-    const next = await workbench.review.update(dateKey, {
+  const saving = await runSave(
+    () => workbench.review.update(dateKey, {
       readingMinutes: Number(record.value.readingMinutes) || 0,
       focusMinutes: Number(record.value.focusMinutes) || 0,
       answers: {
@@ -213,19 +227,37 @@ async function saveReview() {
         whatLearned: record.value.answers.whatLearned || '',
         whatImprove: record.value.answers.whatImprove || ''
       }
-    });
-    ensureRecord(next);
-    history.value = await workbench.review.list();
-    return next;
-  } catch (error) {
-    toast(error.message, 'error');
-    return null;
+    }),
+    { fallback: '复盘保存失败' }
+  );
+  if (!saving.ok) {
+    saveError.value = saving.error;
+    return saving;
   }
+  saveError.value = '';
+  ensureRecord(saving.data);
+  try {
+    history.value = await workbench.review.list();
+  } catch (_) {
+    // 保存已经成功，历史列表刷新失败不影响保存结论
+  }
+  return saving;
 }
 
 async function saveToday() {
-  await saveReview();
-  toast('今日复盘已保存');
+  if (saving.value) return;
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  saving.value = true;
+  try {
+    const outcome = await saveReview();
+    if (outcome.ok) toast('今日复盘已保存');
+    else toast(outcome.error, 'error');
+  } finally {
+    saving.value = false;
+  }
 }
 
 onMounted(loadData);
@@ -233,6 +265,8 @@ onMounted(loadData);
 onBeforeUnmount(() => {
   if (saveTimer) {
     clearTimeout(saveTimer);
+    saveTimer = null;
+    // 离开页面时的兜底保存：失败也只能静默记录，用户已不在页面上
     saveReview();
   }
 });
@@ -366,5 +400,12 @@ onBeforeUnmount(() => {
 
 .review-history-empty {
   color: var(--text-faint);
+}
+
+.review-save-error {
+  margin: 8px 0 0;
+  color: var(--danger, #dc2626);
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>

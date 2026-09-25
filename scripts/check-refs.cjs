@@ -9,6 +9,7 @@ const src = fs.readFileSync(path.join(ROOT, 'electron', 'main.cjs'), 'utf8');
 const modules = {
   appService: 'electron/services/apps.cjs',
   fileService: 'electron/services/files.cjs',
+  noteService: 'electron/services/notes.cjs',
   launcherService: 'electron/services/launcher.cjs',
   backupService: 'electron/services/backup.cjs',
   workspaceService: 'electron/services/workspaces.cjs',
