@@ -16,6 +16,8 @@
       <TodayTodos class="dashboard-todos" @go-todos="$emit('navigate', 'todos')" />
 
       <aside class="dashboard-tools">
+        <RecentWorkspaces @open="openWorkspace" @go-workspace="$emit('navigate', 'workspace')" />
+
         <div v-if="enabledWidgets.length" class="widget-stack">
           <article v-for="w in enabledWidgets" :key="w.id" class="widget-card">
             <header class="widget-card-head">
@@ -55,9 +57,19 @@ import TodayTodos from '../components/TodayTodos.vue';
 import WorkflowPanel from '../components/WorkflowPanel.vue';
 import QuickNoteWidget from '../components/QuickNoteWidget.vue';
 import TimerWidget from '../components/TimerWidget.vue';
+import RecentWorkspaces from '../components/RecentWorkspaces.vue';
 import { workbench } from '../composables/useWorkbench.js';
+import { useWorkspace } from '../composables/useWorkspace.js';
 
-defineEmits(['navigate']);
+const emit = defineEmits(['navigate']);
+
+const { selectWorkspace } = useWorkspace();
+
+/** 从驾驶舱直接进入某个工作空间（不引入 router，沿用 activeView 切换） */
+async function openWorkspace(workspace) {
+  selectWorkspace(workspace.id);
+  emit('navigate', 'workspace');
+}
 
 const widgetDefs = [
   { id: 'quickNote', label: '快速便签' },

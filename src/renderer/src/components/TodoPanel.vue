@@ -130,6 +130,14 @@ import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 import { sortTodosByQuadrant } from '../utils/quadrant.js';
 
+const props = defineProps({
+  /**
+   * 可选：只在某个工作空间内展示该空间的待办。
+   * 不传（null）时行为与原来完全一致 —— 展示全部待办。
+   */
+  workspaceId: { type: String, default: null }
+});
+
 const todos = ref([]);
 const filter = ref('all');
 const draft = ref({ title: '' });
@@ -139,6 +147,17 @@ const form = ref({ title: '', importance: 'high', urgency: 'high', dueDate: '', 
 const maxTasks = 10;
 let reminderTimer = null;
 
+function sameWorkspace(todo) {
+  const value = todo.workspaceId === undefined || todo.workspaceId === null ? null : String(todo.workspaceId);
+  return value === props.workspaceId;
+}
+
+/** 作用域内的待办：详情模式只看本空间，普通模式看全部（含未归类） */
+const scopedTodos = computed(() => {
+  if (!props.workspaceId) return todos.value;
+  return todos.value.filter(sameWorkspace);
+});
+
 const quadrants = {
   importantUrgent: { label: '重要且紧急', className: 'q-red', rank: 0 },
   importantNotUrgent: { label: '重要不紧急', className: 'q-blue', rank: 2 },
@@ -146,10 +165,10 @@ const quadrants = {
   notImportantNotUrgent: { label: '不重要不紧急', className: 'q-green', rank: 3 }
 };
 
-const pendingCount = computed(() => todos.value.filter((item) => !item.completed).length);
+const pendingCount = computed(() => scopedTodos.value.filter((item) => !item.completed).length);
 
 const filteredTodos = computed(() => {
-  const sorted = sortTodosByQuadrant(todos.value);
+  const sorted = sortTodosByQuadrant(scopedTodos.value);
   if (filter.value === 'pending') return sorted.filter((item) => !item.completed);
   return sorted;
 });
@@ -241,9 +260,10 @@ async function saveTodo() {
       reminderFired: false
     };
     if (editingTodo.value) {
+      // 编辑时不动 workspaceId，避免把已有归属改掉
       await workbench.todos.update(editingTodo.value.id, payload);
     } else {
-      await workbench.todos.create(payload);
+      await workbench.todos.create({ ...payload, workspaceId: props.workspaceId || null });
     }
     draft.value = { title: '' };
     await loadTodos();
@@ -263,32 +283,56 @@ async function removeTodo(todo) {
 }
 
 async function clearCompleted() {
-  const completed = todos.value.filter((item) => item.completed);
+  // 只清理当前作用域（工作空间详情内不会误删其他空间的待办）
+  const completed = scopedTodos.value.filter((item) => item.completed);
   if (!completed.length) {
-    toast('没有已完成的待办');
+    toast(props.workspaceId ? '本工作空间没有已完成的待办' : '没有已完成的待办');
     return;
   }
   await Promise.all(completed.map((item) => workbench.todos.remove(item.id)));
   await loadTodos();
 }
 
-function notifyTodo(todo) {
+/**
+ * 待办提醒。
+ *
+ * 修复 P1-1：渲染进程的 new Notification() 在 Windows 上不会真正显示，
+ * 而且构造函数不抛错，导致原来的 catch 兜底永远不执行、reminderFired 却被置为 true，
+ * 提醒变成"静默且不可恢复"的失效。
+ * 现在改为：主进程系统通知 + 可见 toast 兜底，只有确实提示过才写入 reminderFired。
+ */
+async function notifyTodo(todo) {
+  let shown = false;
   try {
-    const notification = new Notification('待办提醒', { body: todo.title });
-    notification.onclick = () => window.focus();
+    const result = await workbench.system.notify({ title: '待办提醒', body: todo.title });
+    shown = Boolean(result && result.shown);
   } catch (_) {
-    toast(`待办提醒：${todo.title}`);
+    shown = false;
   }
+  // toast 由应用自己渲染，一定可见，作为兜底同时提供
+  toast(`待办提醒：${todo.title}`, shown ? 'info' : 'error');
+  return shown;
 }
 
-function checkReminders() {
-  const now = Date.now();
-  for (const todo of todos.value) {
-    if (todo.completed || !todo.reminderAt || todo.reminderFired) continue;
-    const at = new Date(todo.reminderAt).getTime();
-    if (Number.isNaN(at) || at > now) continue;
-    workbench.todos.update(todo.id, { reminderFired: true }).then(() => loadTodos());
-    notifyTodo(todo);
+async function checkReminders() {
+  try {
+    const now = Date.now();
+    for (const todo of todos.value) {
+      if (todo.completed || !todo.reminderAt || todo.reminderFired) continue;
+      const at = new Date(todo.reminderAt).getTime();
+      if (Number.isNaN(at) || at > now) continue;
+      try {
+        await notifyTodo(todo);
+        // 提示已经发出后才标记，避免失败后永久不再提醒
+        await workbench.todos.update(todo.id, { reminderFired: true });
+      } catch (error) {
+        console.error('[reminder] 提醒处理失败', error);
+      }
+    }
+    await loadTodos();
+  } catch (error) {
+    // 定时器回调里的异常不能变成 unhandled rejection
+    console.error('[reminder] 检查提醒失败', error);
   }
 }
 
@@ -300,8 +344,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (reminderTimer) clearInterval(reminderTimer);
-});
-</script>
+});</script>
 
 <style scoped>
 .todo-module {

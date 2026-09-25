@@ -14,8 +14,10 @@
         <span v-else>{{ (userForm.name || '小').slice(0, 1) }}</span>
       </button>
       <div class="user-card__info">
-        <input v-model="userForm.name" class="user-card__name" @blur="saveUser" />
-        <p>点击头像更换图片，修改名字后按 Enter 或点击空白处保存。</p>
+        <input v-model="userForm.name" class="user-card__name" :disabled="savingUser" @blur="saveUser" @keyup.enter="saveUser" />
+        <p v-if="saveError" class="user-card__error">{{ saveError }} —— 修改内容仍保留在输入框里，可以再次保存。</p>
+        <p v-else-if="savingUser">正在保存…</p>
+        <p v-else>点击头像更换图片，修改名字后按 Enter 或点击空白处保存。</p>
       </div>
     </section>
 
@@ -100,8 +102,8 @@
 
       <section class="panel settings-panel about-panel">
         <h2>关于</h2>
-        <p>小菠萝的工作台</p>
-        <p>版本 {{ info.version || '0.1.0' }} · 本地离线运行</p>
+        <p>四一四工作台</p>
+        <p>个人数字工作台 · 版本 {{ info.version || '0.1.0' }} · 本地离线运行</p>
       </section>
     </div>
   </div>
@@ -111,6 +113,8 @@
 import { computed, onMounted, ref } from 'vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
+import { runSave } from '../composables/save-result.js';
+import { saveCustomTone } from '../composables/settings-actions.js';
 
 const props = defineProps({
   settings: { type: Object, default: () => ({ extensions: {} }) }
@@ -119,7 +123,9 @@ const props = defineProps({
 const emit = defineEmits(['settings-updated']);
 
 const info = ref({ version: '', dataDir: '' });
-const userForm = ref({ name: '小菠萝', avatarDataUrl: '' });
+const userForm = ref({ name: '用户', avatarDataUrl: '' });
+const savingUser = ref(false);
+const saveError = ref('');
 
 const builtinTones = [
   { id: 'chime', label: '清脆提示音' },
@@ -135,13 +141,23 @@ const customToneName = computed(() => (
   currentRingtone.value.type === 'custom' ? currentRingtone.value.name : ''
 ));
 
-async function updateSettings(patch) {
-  try {
-    const next = await workbench.settings.update(patch);
-    emit('settings-updated', next);
-  } catch (error) {
-    toast(error.message, 'error');
+/**
+ * 通用设置保存。
+ * 返回明确的 {ok,error}，调用方据此决定是否提示成功（原来吞掉错误后无条件提示）。
+ */
+async function updateSettings(patch, options = {}) {
+  const outcome = await runSave(
+    () => workbench.settings.update(patch),
+    { fallback: '设置保存失败' }
+  );
+  if (outcome.ok) {
+    saveError.value = '';
+    emit('settings-updated', outcome.data);
+  } else {
+    saveError.value = outcome.error;
+    if (!options.silent) toast(outcome.error, 'error');
   }
+  return outcome;
 }
 
 async function changeAvatar() {
@@ -155,17 +171,33 @@ async function changeAvatar() {
   }
 }
 
+/**
+ * 保存用户信息（名称与头像）。
+ *
+ * 只有主进程确认写入后才提示"用户信息已保存"。
+ * 失败时保留用户已经输入的名称，并给出可重试的失败提示。
+ */
 async function saveUser() {
+  if (savingUser.value) return;
+  const nextUser = {
+    name: (userForm.value.name || '').trim() || '用户',
+    avatarDataUrl: userForm.value.avatarDataUrl || ''
+  };
+  savingUser.value = true;
   try {
-    const nextUser = {
-      name: userForm.value.name.trim() || '小菠萝',
-      avatarDataUrl: userForm.value.avatarDataUrl || ''
-    };
+    const outcome = await updateSettings({ user: nextUser }, { silent: true });
+    if (!outcome.ok) {
+      // 不覆盖 userForm，用户输入的名字留在输入框里可以重试
+      saveError.value = outcome.error;
+      toast(`用户信息保存失败：${outcome.error}`, 'error');
+      return outcome;
+    }
     userForm.value = { ...nextUser };
-    await updateSettings({ user: nextUser });
+    saveError.value = '';
     toast('用户信息已保存');
-  } catch (error) {
-    toast(error.message, 'error');
+    return outcome;
+  } finally {
+    savingUser.value = false;
   }
 }
 
@@ -177,10 +209,7 @@ async function chooseCustomTone() {
   try {
     const audio = await workbench.system.selectAudio();
     if (!audio) return;
-    await updateSettings({
-      timerRingtone: { type: 'custom', id: 'custom', name: audio.name, dataUrl: audio.dataUrl }
-    });
-    toast('自定义铃声已保存');
+    await saveCustomTone(audio, updateSettings, toast);
   } catch (error) {
     toast(error.message, 'error');
   }
@@ -220,15 +249,18 @@ async function importBackup() {
   try {
     const result = await workbench.backup.import();
     if (result && result.canceled) return;
-    toast(`已导入 ${result.count} 个数据文件，重启应用后生效`);
+    // 备份是"部分覆盖"：只覆盖备份里包含的表，没有的表保持原样
+    const tables = Array.isArray(result.importedTables) ? result.importedTables.length : result.count;
+    toast(`已导入 ${tables} 个数据文件（未包含的表保持原样），重启应用后生效`);
   } catch (error) {
+    // 结构不合法、含未知表、写入失败已回滚等情况都会走到这里
     toast(error.message, 'error');
   }
 }
 
 onMounted(async () => {
   userForm.value = {
-    name: props.settings.user?.name || '小菠萝',
+    name: props.settings.user?.name || '用户',
     avatarDataUrl: props.settings.user?.avatarDataUrl || ''
   };
   try {
@@ -311,6 +343,10 @@ onMounted(async () => {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.user-card__error {
+  color: var(--danger) !important;
 }
 
 .danger-button {

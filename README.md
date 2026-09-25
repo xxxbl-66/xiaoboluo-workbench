@@ -1,4 +1,4 @@
-# 小菠萝的工作台
+# 四一四工作台
 
 <div align="center">
 
@@ -16,9 +16,9 @@
 
 ## 项目简介
 
-小菠萝的工作台是一款面向 Windows 的本地个人工作台桌面应用，基于 Electron + Vue 3 构建。它专注于「个人效率管理」，不依赖后台服务器，不需要登录账号，默认不主动联网。
+四一四工作台是一款面向 Windows 的本地个人工作台桌面应用，基于 Electron + Vue 3 构建。它专注于「个人效率管理」，不依赖后台服务器，不需要登录账号，默认不主动联网。
 
-所有用户数据都以 JSON 文件形式保存在 Windows「文档」目录下的独立文件夹中，与安装目录分离。软件升级后，你的应用列表、待办、笔记和资源引用都不会丢失。
+所有用户数据都以 JSON 文件形式保存在 Windows「文档」目录下的独立文件夹中，与安装目录分离。软件升级或更名后，你的应用列表、待办、笔记和资源引用都不会丢失。
 
 ## 核心特点
 
@@ -72,8 +72,8 @@
 
 前往 [Releases](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/latest) 下载最新版本：
 
-- **安装包**：[Xiaoboluo-Workbench-0.1.2-setup.exe](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.2/Xiaoboluo-Workbench-0.1.2-setup.exe)
-- **便携版**：[Xiaoboluo-Workbench-0.1.2-portable.exe](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.2/Xiaoboluo-Workbench-0.1.2-portable.exe)
+- **安装包**：[四一四工作台_安装版.exe](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.3/%E5%9B%9B%E4%B8%80%E5%9B%9B%E5%B7%A5%E4%BD%9C%E5%8F%B0_%E5%AE%89%E8%A3%85%E7%89%88.exe)
+- **便携版**：[四一四工作台_便携版.exe](https://github.com/xxxbl-66/xiaoboluo-workbench/releases/download/v0.1.3/%E5%9B%9B%E4%B8%80%E5%9B%9B%E5%B7%A5%E4%BD%9C%E5%8F%B0_%E4%BE%BF%E6%90%BA%E7%89%88.exe)
 
 便携版无需安装，直接运行即可。安装包支持选择安装目录，并会创建桌面和开始菜单快捷方式。
 
@@ -114,18 +114,18 @@ npm install
 | `npm start` | 使用 Electron 启动已构建的应用 |
 | `npm run dist` | 打包 Windows 安装包与便携版 |
 
-打包产物默认输出到 `dist-release/v0.1.2`：
+打包产物默认输出到 `dist-release/v0.1.3`：
 
 ```text
-dist-release/v0.1.2/
-├─ 小菠萝的工作台-0.1.2-安装包.exe
-└─ 小菠萝的工作台-0.1.2-portable.exe
+dist-release/v0.1.3/
+├─ 四一四工作台_安装版.exe
+└─ 四一四工作台_便携版.exe
 ```
 
 ## 项目结构
 
 ```text
-xiaoboluo-workbench/
+414-workbench/
 ├─ electron/                 # Electron 主进程与预加载脚本
 │  ├─ main.cjs               # 主进程入口与 IPC 注册
 │  ├─ preload.cjs            # 安全隔离的预加载桥接
@@ -153,6 +153,10 @@ xiaoboluo-workbench/
 ```text
 C:\Users\<你的用户名>\Documents\小菠萝的工作台
 ```
+
+> 说明：该目录名是历史版本（原名「小菠萝的工作台」）沿用下来的内部路径，
+> 应用更名后**保持不变**，以便老用户升级后能直接读到原有数据。
+> 目录名不影响软件对外显示的名称；你也可以在「设置 → 数据目录」中把它迁移到任意位置。
 
 - 所有用户数据使用 JSON 文件存储。
 - 文件、图片仅保存原始路径，不复制大文件。
@@ -184,7 +188,11 @@ npm install
 
 **升级版本后数据会丢失吗？**
 
-不会。用户数据与安装目录分离，升级安装时不会被覆盖。建议定期在「设置 → 备份」中导出一份备份。
+不会。用户数据与安装目录分离，升级安装时不会被覆盖。软件更名后数据目录仍沿用原路径，因此更名不会导致数据丢失。建议定期在「设置 → 备份」中导出一份备份。
+
+**为什么软件叫「四一四工作台」，数据目录却还是「小菠萝的工作台」？**
+
+数据目录属于内部历史标识。为了不让老用户升级后看到一片空白，更名时只调整了对外的产品名称，数据目录保持原路径兼容。它不影响任何界面显示，你可以在「设置 → 数据目录」中更改它的位置。
 
 ## 反馈与贡献
 

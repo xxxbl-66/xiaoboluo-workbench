@@ -11,7 +11,7 @@ function defaultGroups() {
 function defaultSettings() {
   return {
     theme: 'light',
-    user: { name: '小菠萝', avatarDataUrl: '' },
+    user: { name: '用户', avatarDataUrl: '' },
     navOrder: [],
     launchAtStartup: false,
     timerRingtone: { type: 'builtin', id: 'chime' },

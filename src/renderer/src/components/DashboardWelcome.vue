@@ -1,6 +1,7 @@
 <template>
   <section class="welcome-banner">
     <div class="welcome-greeting">
+      <span class="welcome-product">四一四工作台</span>
       <span class="welcome-date">{{ dateLabel }}</span>
       <strong class="welcome-greeting-name">你好，{{ user.name }}</strong>
       <p class="welcome-sub">今天也按自己的节奏推进吧。</p>
@@ -43,7 +44,7 @@ import { computed, onMounted, ref } from 'vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { useTodosStore } from '../composables/useTodosStore.js';
 
-const user = ref({ name: '小菠萝' });
+const user = ref({ name: '用户' });
 const checkin = ref({ streak: 0 });
 const books = ref(0);
 const { todos, loadTodos } = useTodosStore();
@@ -72,7 +73,7 @@ onMounted(async () => {
       workbench.checkins.get(),
       workbench.books.list()
     ]);
-    user.value = { name: settings.user?.name || '小菠萝' };
+    user.value = { name: settings.user?.name || '用户' };
     checkin.value = checkinData;
     books.value = bookList.length;
   } catch (_) {}
@@ -85,6 +86,13 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.welcome-product {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 .welcome-date {

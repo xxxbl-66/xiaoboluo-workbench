@@ -78,6 +78,12 @@ function resolveIconTarget(filePath) {
   return target && fs.existsSync(target) ? target : filePath;
 }
 
+function normalizeScope(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
 async function makeAppEntry(store, filePath, options = {}) {
   const name = options.name || path.basename(filePath, path.extname(filePath));
   const groupId = options.groupId || 'default';
@@ -87,6 +93,7 @@ async function makeAppEntry(store, filePath, options = {}) {
     name,
     path: filePath,
     groupId,
+    workspaceId: normalizeScope(options.workspaceId),
     iconFile: '',
     sort: Date.now(),
     createdAt: new Date().toISOString(),

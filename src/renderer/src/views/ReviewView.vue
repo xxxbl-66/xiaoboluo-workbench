@@ -8,6 +8,36 @@
       </div>
     </header>
 
+    <section class="panel review-work">
+      <div class="panel-head">
+        <div>
+          <h2>今日工作概览</h2>
+          <p>来自工作空间的真实计时记录，不需要手动填写。</p>
+        </div>
+        <div class="review-work-total">
+          <span>今日工作总时长</span>
+          <strong>{{ formatDuration(workSummary.totalSeconds) }}</strong>
+        </div>
+      </div>
+
+      <div v-if="workSummary.byWorkspace.length" class="review-work-list">
+        <article v-for="item in workSummary.byWorkspace" :key="item.workspaceId || 'unassigned'" class="review-work-item">
+          <span class="review-work-dot" :style="{ background: item.color || 'var(--border-strong)' }"></span>
+          <span class="review-work-name">{{ item.name }}</span>
+          <span class="review-work-time">{{ formatDuration(item.seconds) }}</span>
+        </article>
+      </div>
+      <div v-else class="empty-state small">
+        <p>今天还没有工作记录。到「工作空间」开始一次工作，这里就会自动统计。</p>
+      </div>
+
+      <div class="review-work-foot">
+        <span>今日完成 {{ workSummary.completedTodoCount }} 项任务</span>
+        <span v-if="workSummary.activeSessionCount">· 有 {{ workSummary.activeSessionCount }} 次工作还在进行中</span>
+        <span>· 工作时长按工作开始日期统计</span>
+      </div>
+    </section>
+
     <section class="review-metrics">
       <article class="metric-card">
         <span>待办完成度</span>
@@ -16,11 +46,11 @@
       </article>
       <article class="metric-card">
         <span>阅读时长</span>
-        <strong><input v-model.number="record.readingMinutes" type="number" min="0" @change="saveMetrics" /> 分钟</strong>
+        <strong><input v-model.number="record.readingMinutes" type="number" min="0" @input="saveController.markChanged()" @change="saveMetrics" /> 分钟</strong>
       </article>
       <article class="metric-card">
         <span>专注时长</span>
-        <strong><input v-model.number="record.focusMinutes" type="number" min="0" @change="saveMetrics" /> 分钟</strong>
+        <strong><input v-model.number="record.focusMinutes" type="number" min="0" @input="saveController.markChanged()" @change="saveMetrics" /> 分钟</strong>
       </article>
     </section>
 
@@ -45,7 +75,10 @@
         <textarea v-model="record.answers.whatImprove" placeholder="下一步最小改进动作…" @input="scheduleSave"></textarea>
       </div>
 
-      <button class="review-save-button" type="button" @click="saveToday">保存今日复盘</button>
+      <button class="review-save-button" type="button" :disabled="saving" @click="saveToday">
+        {{ saving ? '保存中…' : '保存今日复盘' }}
+      </button>
+      <p v-if="saveError" class="review-save-error">{{ saveError }} —— 内容仍保留在本页，可以重新点击保存。</p>
     </section>
 
     <section class="panel review-history">
@@ -77,16 +110,34 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
+import { createReviewSaveController } from '../composables/review-save-controller.js';
+import { formatDuration } from '../utils/duration.js';
 
 const todos = ref([]);
 const history = ref([]);
+const workSummary = ref({ totalSeconds: 0, completedTodoCount: 0, activeSessionCount: 0, byWorkspace: [] });
 const record = ref({
   date: '',
   readingMinutes: 0,
   focusMinutes: 0,
   answers: { whatDid: '', whatLearned: '', whatImprove: '' }
 });
+const saving = ref(false);
+const saveError = ref('');
 let saveTimer = null;
+const saveController = createReviewSaveController({
+  getDraft: () => ({
+    readingMinutes: Number(record.value.readingMinutes) || 0,
+    focusMinutes: Number(record.value.focusMinutes) || 0,
+    answers: {
+      whatDid: record.value.answers.whatDid || '',
+      whatLearned: record.value.answers.whatLearned || '',
+      whatImprove: record.value.answers.whatImprove || ''
+    }
+  }),
+  write: (payload) => workbench.review.update(dateKey, payload),
+  applySaved: ensureRecord
+});
 
 const today = new Date();
 const todayLabel = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
@@ -124,6 +175,31 @@ function formatHistoryTime(value) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
+async function loadWorkSummary() {
+  try {
+    const [summary, workspaces] = await Promise.all([
+      workbench.sessions.summary({ dateKey }),
+      workbench.workspaces.list({ includeArchived: true, withStats: false })
+    ]);
+    const nameById = new Map(workspaces.map((item) => [item.id, item]));
+    workSummary.value = {
+      ...summary,
+      byWorkspace: (summary.byWorkspace || [])
+        .map((bucket) => {
+          const workspace = bucket.workspaceId ? nameById.get(bucket.workspaceId) : null;
+          return {
+            ...bucket,
+            name: workspace ? workspace.name : '未归类的工作',
+            color: workspace ? workspace.color : ''
+          };
+        })
+        .sort((left, right) => right.seconds - left.seconds)
+    };
+  } catch (_) {
+    workSummary.value = { totalSeconds: 0, completedTodoCount: 0, activeSessionCount: 0, byWorkspace: [] };
+  }
+}
+
 async function loadData() {
   const [todoList, review, reviewHistory] = await Promise.all([
     workbench.todos.list(),
@@ -133,9 +209,11 @@ async function loadData() {
   todos.value = todoList;
   ensureRecord(review);
   history.value = reviewHistory;
+  await loadWorkSummary();
 }
 
 function scheduleSave() {
+  saveController.markChanged();
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveReview, 500);
 }
@@ -143,45 +221,139 @@ function scheduleSave() {
 async function saveMetrics() {
   record.value.readingMinutes = Number(record.value.readingMinutes) || 0;
   record.value.focusMinutes = Number(record.value.focusMinutes) || 0;
-  await saveReview();
+  saveController.markChanged();
+  const outcome = await saveReview({ silent: true });
+  if (!outcome.ok) toast(outcome.error, 'error');
+  else if (outcome.current) toast('阅读／专注时长已保存');
 }
 
+/**
+ * 真实保存复盘。
+ *
+ * 返回 {ok,error} 而不是 null：上层必须据此决定是否提示成功。
+ * 失败时【不修改 record】，用户已输入的内容留在页面上可以重试。
+ */
 async function saveReview() {
-  try {
-    const next = await workbench.review.update(dateKey, {
-      readingMinutes: Number(record.value.readingMinutes) || 0,
-      focusMinutes: Number(record.value.focusMinutes) || 0,
-      answers: {
-        whatDid: record.value.answers.whatDid || '',
-        whatLearned: record.value.answers.whatLearned || '',
-        whatImprove: record.value.answers.whatImprove || ''
-      }
-    });
-    ensureRecord(next);
-    history.value = await workbench.review.list();
-    return next;
-  } catch (error) {
-    toast(error.message, 'error');
-    return null;
+  const saving = await saveController.save();
+  if (!saving.ok) {
+    saveError.value = saving.error;
+    return saving;
   }
+  saveError.value = '';
+  try {
+    history.value = await workbench.review.list();
+  } catch (_) {
+    // 保存已经成功，历史列表刷新失败不影响保存结论
+  }
+  return saving;
 }
 
 async function saveToday() {
-  await saveReview();
-  toast('今日复盘已保存');
-}
-
-onMounted(loadData);
-
-onBeforeUnmount(() => {
+  if (saving.value) return;
   if (saveTimer) {
     clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  saving.value = true;
+  try {
+    const outcome = await saveReview();
+    if (!outcome.ok) toast(outcome.error, 'error');
+    else if (outcome.current) toast('今日复盘已保存');
+  } finally {
+    saving.value = false;
+  }
+}
+
+onMounted(() => {
+  loadData();
+  window.addEventListener('workbench:session-duration-adjusted', loadWorkSummary);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('workbench:session-duration-adjusted', loadWorkSummary);
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    // 离开页面时的兜底保存：失败也只能静默记录，用户已不在页面上
     saveReview();
   }
 });
 </script>
 
 <style scoped>
+.review-work {
+  margin-bottom: 18px;
+}
+
+.review-work-total {
+  text-align: right;
+  flex: 0 0 auto;
+}
+
+.review-work-total span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+
+.review-work-total strong {
+  font-size: 22px;
+  color: var(--text);
+}
+
+.review-work-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-work-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface-muted);
+}
+
+.review-work-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.review-work-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-work-time {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.review-work-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .review-save-button {
   width: 100%;
   margin-top: 6px;
@@ -236,5 +408,12 @@ onBeforeUnmount(() => {
 
 .review-history-empty {
   color: var(--text-faint);
+}
+
+.review-save-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>

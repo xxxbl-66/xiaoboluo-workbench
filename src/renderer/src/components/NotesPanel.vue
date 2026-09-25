@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <section class="panel notes-panel">
     <div class="panel-head">
       <div>
@@ -41,7 +41,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import MarkdownRenderer from './MarkdownRenderer.vue';
 import LineIcon from './LineIcon.vue';
 import { workbench } from '../composables/useWorkbench.js';
@@ -60,16 +60,32 @@ async function loadNotes() {
   }
 }
 
-function selectNote(note) {
+/** 把待保存的防抖内容立刻落盘 */
+async function flushPendingSave() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  await saveSelected();
+}
+
+async function selectNote(note) {
+  // 修复 P1-2：切换便签前先把 500ms 防抖中的输入存下来，否则会丢最后一段输入
+  if (selected.value && selected.value.id !== note.id) {
+    await flushPendingSave();
+  }
   selectedId.value = note.id;
-  selected.value = note;
+  selected.value = notes.value.find((item) => item.id === note.id) || note;
   mode.value = 'edit';
 }
 
 async function createNote() {
-  const note = await workbench.files.notes.create({ title: '无标题便签', content: '' });
-  notes.value = [note, ...notes.value];
-  selectNote(note);
+  try {
+    const note = await workbench.files.notes.create({ title: '无标题便签', content: '' });
+    notes.value = [note, ...notes.value];
+    selectNote(note);
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 function scheduleSave() {
@@ -79,21 +95,34 @@ function scheduleSave() {
 
 async function saveSelected() {
   if (!selected.value) return;
-  const note = await workbench.files.notes.update(selected.value.id, {
-    title: selected.value.title,
-    content: selected.value.content
-  });
-  const index = notes.value.findIndex((item) => item.id === note.id);
-  if (index !== -1) notes.value[index] = note;
+  try {
+    const note = await workbench.files.notes.update(selected.value.id, {
+      title: selected.value.title,
+      content: selected.value.content
+    });
+    const index = notes.value.findIndex((item) => item.id === note.id);
+    if (index !== -1) notes.value[index] = note;
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 async function removeSelected() {
   if (!selected.value) return;
   if (!window.confirm(`确定删除「${selected.value.title}」吗？`)) return;
-  notes.value = await workbench.files.notes.remove(selected.value.id);
-  selected.value = notes.value[0] || null;
-  selectedId.value = selected.value ? selected.value.id : null;
+  try {
+    notes.value = await workbench.files.notes.remove(selected.value.id);
+    selected.value = notes.value[0] || null;
+    selectedId.value = selected.value ? selected.value.id : null;
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 onMounted(loadNotes);
+
+// 修复 P1-2：组件卸载（切换 tab / 切页面）时把未保存内容写回
+onBeforeUnmount(() => {
+  flushPendingSave();
+});
 </script>
