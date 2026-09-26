@@ -1124,6 +1124,7 @@ function registerIpc() {
 
   safeHandle('bookmarks:list', () => readBookmarks());
   safeHandle('bookmarks:create', (bookmark) => {
+    if (bookmark.url && !launcherService.isSafeExternalUrl(bookmark.url)) throw new Error('只支持 http 或 https 链接');
     const items = readBookmarks();
     const entry = {
       id: id(),
@@ -1140,6 +1141,7 @@ function registerIpc() {
     return entry;
   });
   safeHandle('bookmarks:update', (bookmarkId, patch) => {
+    if (patch.url && !launcherService.isSafeExternalUrl(patch.url)) throw new Error('只支持 http 或 https 链接');
     const items = readBookmarks();
     const index = items.findIndex((item) => item.id === bookmarkId);
     if (index === -1) throw new Error('收藏不存在');
@@ -1362,7 +1364,12 @@ function registerIpc() {
 
   safeHandle('sessions:list', (options) => sessionService.listSessions(store, options || {}));
   safeHandle('sessions:get-active', () => sessionService.getActiveSession(store));
-  safeHandle('sessions:start', (workspaceId) => sessionService.startSession(store, workspaceId));
+  safeHandle('sessions:start', (workspaceId) => {
+    const workspace = workspaceId ? workspaceService.findWorkspace(store, workspaceId) : null;
+    if (workspaceId && !workspace) throw new Error('工作空间不存在');
+    if (workspace && workspace.archived === true) throw new Error('已归档的工作空间不能开始工作，请先恢复');
+    return sessionService.startSession(store, workspaceId);
+  });
 
   /**
    * 结束会话。
@@ -1372,15 +1379,17 @@ function registerIpc() {
   safeHandle('sessions:end', (sessionId, patch) => {
     const session = sessionService.findSession(store, sessionId);
     if (!session) throw new Error('工作记录不存在');
-    sessionService.assertTodosInScope(session, readTodos(), (patch || {}).completedTodoIds);
-    return sessionService.endSession(store, sessionId, patch || {});
+    const todos = readTodos();
+    sessionService.assertTodosInScope(session, todos, (patch || {}).completedTodoIds);
+    return sessionService.endSession(store, sessionId, patch || {}, todos);
   });
 
   safeHandle('sessions:update', (sessionId, patch) => {
     const session = sessionService.findSession(store, sessionId);
     if (!session) throw new Error('工作记录不存在');
-    sessionService.assertTodosInScope(session, readTodos(), (patch || {}).completedTodoIds);
-    return sessionService.updateSession(store, sessionId, patch || {});
+    const todos = readTodos();
+    sessionService.assertTodosInScope(session, todos, (patch || {}).completedTodoIds);
+    return sessionService.updateSession(store, sessionId, patch || {}, todos);
   });
 
   /**
@@ -1431,7 +1440,9 @@ function registerIpc() {
 
     return sessions.map((session) => {
       const ids = Array.isArray(session.completedTodoIds) ? session.completedTodoIds : [];
-      const completedTodos = ids.map((todoId) => {
+      const completedTodos = Array.isArray(session.completedTodoSnapshots)
+        ? session.completedTodoSnapshots
+        : ids.map((todoId) => {
         const todo = todoById.get(todoId);
         return {
           id: todoId,
@@ -1457,9 +1468,16 @@ function registerIpc() {
     if (!session) return null;
     const todos = readTodos();
     const completed = new Set(Array.isArray(session.completedTodoIds) ? session.completedTodoIds : []);
+    const todoById = new Map(todos.filter((todo) => todo && todo.id).map((todo) => [todo.id, todo]));
+    const completedTodos = Array.isArray(session.completedTodoSnapshots)
+      ? session.completedTodoSnapshots
+      : [...completed].map((todoId) => {
+        const todo = todoById.get(todoId);
+        return { id: todoId, title: todo ? todo.title : '（原任务已删除）', missing: !todo };
+      });
     return {
       ...session,
-      completedTodos: todos.filter((todo) => completed.has(todo.id)),
+      completedTodos,
       remainingTodos: todos.filter((todo) => (
         workspaceService.normalizeWorkspaceId(todo.workspaceId) === workspaceService.normalizeWorkspaceId(workspaceId)
         && todo.completed !== true

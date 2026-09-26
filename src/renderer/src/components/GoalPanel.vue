@@ -118,6 +118,7 @@ const props = defineProps({
    */
   workspaceId: { type: String, default: null }
 });
+const emit = defineEmits(['changed']);
 
 const allGoals = ref([]);
 const showModal = ref(false);
@@ -230,6 +231,7 @@ async function saveGoal() {
       await workbench.goals.create({ ...payload, workspaceId: props.workspaceId || null });
     }
     await loadGoals();
+    emit('changed');
     closeModal();
     toast('目标已保存');
   } catch (error) {
@@ -252,6 +254,7 @@ async function checkinGoal(goal) {
   try {
     await workbench.goals.checkin(goal.id);
     await loadGoals();
+    emit('changed');
   } catch (error) {
     toast(error.message, 'error');
   }
@@ -283,6 +286,7 @@ async function removeGoal(goal) {
       return;
     }
     allGoals.value = result.goals;
+    emit('changed');
     toast('目标已删除');
   } finally {
     removingId.value = null;
@@ -290,6 +294,7 @@ async function removeGoal(goal) {
 }
 
 onMounted(loadGoals);
+defineExpose({ reload: loadGoals });
 </script>
 
 <style scoped>

@@ -137,6 +137,7 @@ const props = defineProps({
    */
   workspaceId: { type: String, default: null }
 });
+const emit = defineEmits(['changed']);
 
 const todos = ref([]);
 const filter = ref('all');
@@ -267,6 +268,7 @@ async function saveTodo() {
     }
     draft.value = { title: '' };
     await loadTodos();
+    emit('changed');
     closeModal();
   } catch (error) {
     toast(error.message, 'error');
@@ -276,10 +278,12 @@ async function saveTodo() {
 async function toggleTodo(todo) {
   await workbench.todos.update(todo.id, { completed: !todo.completed });
   await loadTodos();
+  emit('changed');
 }
 
 async function removeTodo(todo) {
   todos.value = await workbench.todos.remove(todo.id);
+  emit('changed');
 }
 
 async function clearCompleted() {
@@ -291,6 +295,7 @@ async function clearCompleted() {
   }
   await Promise.all(completed.map((item) => workbench.todos.remove(item.id)));
   await loadTodos();
+  emit('changed');
 }
 
 /**
@@ -344,7 +349,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (reminderTimer) clearInterval(reminderTimer);
-});</script>
+});
+defineExpose({ reload: loadTodos });
+</script>
 
 <style scoped>
 .todo-module {

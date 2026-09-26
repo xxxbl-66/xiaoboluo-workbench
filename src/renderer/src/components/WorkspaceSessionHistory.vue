@@ -33,7 +33,7 @@
             </span>
           </div>
           <div class="session-history__badges">
-            <span class="session-history__badge">完成 {{ item.completedCount || 0 }} 项</span>
+            <span class="session-history__badge">完成 {{ completedOf(item).length }} 项</span>
             <span v-if="item.durationAdjusted" class="session-history__badge adjusted">已校正时长</span>
             <button
               class="ghost small"
@@ -48,8 +48,8 @@
 
         <p v-if="item.note" class="session-history__line">备注：{{ item.note }}</p>
         <p v-if="item.nextStep" class="session-history__line">下一步：{{ item.nextStep }}</p>
-        <p v-if="item.completedTodos && item.completedTodos.length" class="session-history__line">
-          完成事项：{{ item.completedTodos.map((todo) => todo.title).join('、') }}
+        <p v-if="completedOf(item).length" class="session-history__line">
+          上次完成事项：{{ completedOf(item).map((todo) => todo.title).join('、') }}
         </p>
         <p v-if="item.originalDurationSeconds !== undefined && item.durationAdjustmentCount" class="session-history__line session-history__line--faint">
           校正记录：原记录时长 {{ formatDuration(item.originalDurationSeconds) }}
@@ -77,7 +77,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import SessionDurationAdjustModal from './SessionDurationAdjustModal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
@@ -89,6 +89,7 @@ const props = defineProps({
   /** 首屏条数：历史多时只加载最近若干条 */
   pageSize: { type: Number, default: 5 }
 });
+const emit = defineEmits(['adjusted']);
 
 const sessions = ref([]);
 const limit = ref(props.pageSize);
@@ -98,27 +99,39 @@ const errorMessage = ref('');
 const showAdjust = ref(false);
 const adjustTarget = ref(null);
 const adjustingId = ref(null);
+let mounted = true;
+let loadGeneration = 0;
+
+function completedOf(session) {
+  if (Array.isArray(session.completedTodoSnapshots)) return session.completedTodoSnapshots;
+  return Array.isArray(session.completedTodos) ? session.completedTodos : [];
+}
 
 /**
  * 多取一条用来判断"是否还有更多"，但只展示 pageSize 条，
  * 避免一次把全部历史推给界面。
  */
 async function load(nextLimit) {
-  if (loading.value) return;
+  const generation = ++loadGeneration;
+  const workspaceId = props.workspaceId;
+  const current = () => mounted && generation === loadGeneration && props.workspaceId === workspaceId;
   loading.value = true;
   errorMessage.value = '';
   const asked = Math.max(1, Number(nextLimit) || props.pageSize);
   try {
-    const rows = await workbench.sessions.history({ workspaceId: props.workspaceId, limit: asked + 1 });
+    const rows = await workbench.sessions.history({ workspaceId, limit: asked + 1 });
+    if (!current()) return;
     const list = Array.isArray(rows) ? rows : [];
     hasMore.value = list.length > asked;
     sessions.value = list.slice(0, asked);
     limit.value = asked;
   } catch (error) {
-    errorMessage.value = `工作历史加载失败：${error.message || '未知错误'}`;
-    hasMore.value = false;
+    if (current()) {
+      errorMessage.value = `工作历史加载失败：${error.message || '未知错误'}`;
+      hasMore.value = false;
+    }
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
@@ -141,11 +154,18 @@ function adjustCall(sessionId, seconds, options) {
 async function onAdjusted() {
   toast('工作时长已按你的确认校正');
   await load(limit.value);
+  emit('adjusted');
 }
 
 defineExpose({ reload: () => load(limit.value) });
 
 onMounted(() => load(props.pageSize));
+watch(() => props.workspaceId, () => {
+  sessions.value = [];
+  limit.value = props.pageSize;
+  load(props.pageSize);
+});
+onBeforeUnmount(() => { mounted = false; loadGeneration++; });
 </script>
 
 <style scoped>

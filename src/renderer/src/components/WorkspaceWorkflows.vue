@@ -16,7 +16,7 @@
         <span v-if="workflow.id === workspace.resumeWorkflowId" class="ws-workflows__badge">
           继续工作时运行
         </span>
-        <button class="ghost small" type="button" :disabled="Boolean(running) || busy" @click="run(workflow)">
+        <button v-if="!archived" class="ghost small" type="button" :disabled="Boolean(running) || busy" @click="run(workflow)">
           <LineIcon name="play" :size="13" />
           {{ running === workflow.id ? '运行中…' : '运行' }}
         </button>
@@ -36,11 +36,13 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import LineIcon from './LineIcon.vue';
 import WorkflowRunResult from './WorkflowRunResult.vue';
 import { workbench } from '../composables/useWorkbench.js';
+import { workflowStepSummary } from './workspace-workflow-summary.js';
 
 const props = defineProps({
   workspace: { type: Object, required: true },
   workflows: { type: Array, default: () => [] },
-  busy: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false },
+  archived: { type: Boolean, default: false }
 });
 
 defineEmits(['changed']);
@@ -59,15 +61,7 @@ const bound = computed(() => ids.value
 const missingIds = computed(() => ids.value.filter((id) => !props.workflows.some((item) => item.id === id)));
 
 function stepSummary(workflow) {
-  const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
-  if (!steps.length) return '没有步骤';
-  const labels = { app: '应用', file: '文件', url: '网页' };
-  const counts = {};
-  for (const step of steps) {
-    const key = labels[step.type] || step.type || '未知';
-    counts[key] = (counts[key] || 0) + 1;
-  }
-  return `${steps.length} 个步骤 · ${Object.entries(counts).map(([key, value]) => `${key}×${value}`).join('、')}`;
+  return workflowStepSummary(workflow);
 }
 
 async function run(workflow) {

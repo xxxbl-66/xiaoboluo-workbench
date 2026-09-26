@@ -653,16 +653,19 @@ test('阶段一-47 归档 Workspace 的历史记录不丢失，且缺字段的�
     const ws = await ctx.invoke('workspaces:create', { name: '已归档项目' });
     const session = (await ctx.invoke('sessions:start', ws.id)).session;
     await ctx.invoke('sessions:end', session.id, { note: '归档前的工作' });
-    await ctx.invoke('workspaces:archive', ws.id, true);
-
-    const history = await ctx.invoke('sessions:history', { workspaceId: ws.id });
-    assert.equal(history.length, 1, '归档不能丢历史');
-    assert.equal(history[0].note, '归档前的工作');
-
-    // 生成型待办被删除后，历史里明确标记"原任务已删除"，不让记录凭空消失
+    // 旧记录没有标题快照：模拟旧版完成任务后被删除的历史
     const todo = await ctx.invoke('todos:create', { title: '会被删的任务', workspaceId: ws.id });
     const s2 = (await ctx.invoke('sessions:start', ws.id)).session;
     await ctx.invoke('sessions:end', s2.id, { completedTodoIds: [todo.id] });
+    const legacyRows = readTable(ctx, 'work-sessions.json');
+    delete legacyRows.find((item) => item.id === s2.id).completedTodoSnapshots;
+    writeTable(ctx, 'work-sessions.json', legacyRows);
+    await ctx.invoke('workspaces:archive', ws.id, true);
+
+    const history = await ctx.invoke('sessions:history', { workspaceId: ws.id });
+    assert.equal(history.length, 2, '归档不能丢历史');
+    assert.equal(history.find((item) => item.id === session.id).note, '归档前的工作');
+
     await ctx.invoke('todos:delete', todo.id);
 
     const after = await ctx.invoke('sessions:history', { workspaceId: ws.id });

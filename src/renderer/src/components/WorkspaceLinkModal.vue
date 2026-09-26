@@ -32,7 +32,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import Modal from './Modal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
@@ -43,13 +43,16 @@ const props = defineProps({
   kind: { type: String, required: true },
   workspaceId: { type: String, required: true },
   /** 当前所有工作空间，用于提示"该项目当前属于 X" */
-  workspaces: { type: Array, default: () => [] }
+  workspaces: { type: Array, default: () => [] },
+  archived: { type: Boolean, default: false }
 });
 
 const emit = defineEmits(['close', 'linked']);
 
 const loading = ref(false);
 const items = ref([]);
+let mounted = true;
+let loadGeneration = 0;
 
 const typeLabel = computed(() => ({
   todo: '待办',
@@ -84,9 +87,13 @@ function normalize(value) {
 }
 
 async function load() {
+  const generation = ++loadGeneration;
+  const workspaceId = props.workspaceId;
+  const kind = props.kind;
+  const currentRequest = () => mounted && props.modelValue && generation === loadGeneration && props.workspaceId === workspaceId && props.kind === kind;
   loading.value = true;
   try {
-    const current = props.workspaceId;
+    const current = workspaceId;
     let rows = [];
 
     if (props.kind === 'todo') {
@@ -133,18 +140,21 @@ async function load() {
       }));
     }
 
+    if (!currentRequest()) return;
     items.value = rows
       .filter((row) => normalize(row.workspaceId) !== current)
       .map((row) => ({ ...row, owner: ownerName(normalize(row.workspaceId)) }));
   } catch (error) {
-    toast(error.message, 'error');
-    items.value = [];
+    if (currentRequest()) { toast(error.message, 'error'); items.value = []; }
   } finally {
-    loading.value = false;
+    if (currentRequest()) loading.value = false;
   }
 }
 
 async function choose(item) {
+  if (props.archived) return;
+  const workspaceId = props.workspaceId;
+  const kind = props.kind;
   const prompt = item.owner
     ? `「${item.title}」当前属于「${item.owner}」，移动到当前工作空间？`
     : `把「${item.title}」关联到当前工作空间？`;
@@ -152,10 +162,11 @@ async function choose(item) {
 
   try {
     await workbench.workspaces.linkResource({
-      kind: props.kind,
+      kind,
       id: item.id,
-      workspaceId: props.workspaceId
+      workspaceId
     });
+    if (!mounted || !props.modelValue || props.workspaceId !== workspaceId || props.kind !== kind) return;
     toast('已关联到当前工作空间');
     items.value = items.value.filter((row) => row.id !== item.id);
     emit('linked');
@@ -168,9 +179,11 @@ watch(
   () => [props.modelValue, props.kind, props.workspaceId],
   () => {
     if (props.modelValue) load();
+    else { loadGeneration++; items.value = []; loading.value = false; }
   },
   { immediate: true }
 );
+onBeforeUnmount(() => { mounted = false; loadGeneration++; });
 </script>
 
 <style scoped>

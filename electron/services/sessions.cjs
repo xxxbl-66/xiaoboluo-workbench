@@ -163,7 +163,7 @@ function assertTodosInScope(session, todos, completedTodoIds) {
  * 一次误调用就能把用户校正过的有效时长重新改回虚高的墙上时间。
  * 需要修正已结束记录请使用 adjustSessionDuration（有界、可审计）。
  */
-function endSession(store, sessionId, patch = {}) {
+function endSession(store, sessionId, patch = {}, todos) {
   const items = readSessions(store);
   const index = items.findIndex((item) => item.id === sessionId);
   if (index === -1) throw new Error('工作记录不存在');
@@ -177,6 +177,10 @@ function endSession(store, sessionId, patch = {}) {
   const iso = now.toISOString();
   const duration = elapsedSeconds(session.startedAt, iso);
   const todoIds = normalizeTodoIds(patch.completedTodoIds);
+  const completedIds = todoIds || (Array.isArray(session.completedTodoIds) ? session.completedTodoIds : []);
+  const scopedIds = todos ? assertTodosInScope(session, todos, completedIds) : [];
+  const todoById = new Map((todos || []).map((todo) => [todo.id, todo]));
+  const completedTodoSnapshots = scopedIds.map((todoId) => ({ id: todoId, title: String(todoById.get(todoId).title ?? '') }));
 
   const next = {
     ...session,
@@ -184,7 +188,8 @@ function endSession(store, sessionId, patch = {}) {
     durationSeconds: duration,
     note: patch.note === undefined ? String(session.note || '') : String(patch.note || ''),
     nextStep: patch.nextStep === undefined ? String(session.nextStep || '') : String(patch.nextStep || ''),
-    completedTodoIds: todoIds || (Array.isArray(session.completedTodoIds) ? session.completedTodoIds : []),
+    completedTodoIds: completedIds,
+    ...(todos ? { completedTodoSnapshots } : {}),
     updatedAt: iso
   };
 
@@ -228,7 +233,7 @@ function resumeSession(store, sessionId) {
  * 更新会话的可变字段。id / startedAt / createdAt 受保护。
  * endedAt 与 durationSeconds 由 endSession 负责，这里只允许修正文字内容。
  */
-function updateSession(store, sessionId, patch = {}) {
+function updateSession(store, sessionId, patch = {}, todos) {
   const items = readSessions(store);
   const index = items.findIndex((item) => item.id === sessionId);
   if (index === -1) throw new Error('工作记录不存在');
@@ -240,6 +245,15 @@ function updateSession(store, sessionId, patch = {}) {
   if (patch.nextStep !== undefined) next.nextStep = String(patch.nextStep || '');
   if (patch.completedTodoIds !== undefined) {
     next.completedTodoIds = normalizeTodoIds(patch.completedTodoIds) || [];
+    if (todos) {
+      const previous = new Map((Array.isArray(current.completedTodoSnapshots) ? current.completedTodoSnapshots : [])
+        .filter((snapshot) => snapshot && snapshot.id)
+        .map((snapshot) => [snapshot.id, snapshot]));
+      const todoById = new Map(todos.filter((todo) => todo && todo.id).map((todo) => [todo.id, todo]));
+      next.completedTodoSnapshots = next.completedTodoIds.map((todoId) => previous.get(todoId) || {
+        id: todoId, title: String(todoById.get(todoId).title ?? '')
+      });
+    }
   }
   if (patch.workspaceId !== undefined) next.workspaceId = normalizeWorkspaceId(patch.workspaceId);
 

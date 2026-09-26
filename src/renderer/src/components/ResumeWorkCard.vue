@@ -8,7 +8,7 @@
           <span class="resume-card__duration">{{ formatDuration(session.durationSeconds) }}</span>
         </h2>
       </div>
-      <button class="primary" type="button" :disabled="busy" @click="$emit('resume')">
+      <button v-if="!archived" class="primary" type="button" :disabled="busy" @click="$emit('resume')">
         <LineIcon name="play" :size="15" />
         {{ busy ? '正在恢复…' : '继续上次工作' }}
       </button>
@@ -54,7 +54,8 @@
 
   <section v-else class="resume-card resume-card--empty panel">
     <p class="resume-card__kicker">上次做到哪里</p>
-    <p>这个工作空间还没有工作记录。点击「开始工作」记录第一次，之后就能一键接着继续。</p>
+    <p v-if="archived">这个工作空间还没有工作记录。恢复后可以开始新的工作。</p>
+    <p v-else>这个工作空间还没有工作记录。点击「开始工作」记录第一次，之后就能一键接着继续。</p>
   </section>
 </template>
 
@@ -65,13 +66,16 @@ import { formatDuration, formatRelative } from '../utils/duration.js';
 
 const props = defineProps({
   session: { type: Object, default: null },
-  busy: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false },
+  archived: { type: Boolean, default: false }
 });
 
 defineEmits(['resume']);
 
 const completed = computed(() => (
-  props.session && Array.isArray(props.session.completedTodos) ? props.session.completedTodos : []
+  props.session && Array.isArray(props.session.completedTodoSnapshots)
+    ? props.session.completedTodoSnapshots
+    : props.session && Array.isArray(props.session.completedTodos) ? props.session.completedTodos : []
 ));
 const remaining = computed(() => (
   props.session && Array.isArray(props.session.remainingTodos) ? props.session.remainingTodos : []

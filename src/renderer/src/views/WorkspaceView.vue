@@ -84,7 +84,7 @@
         </div>
       </section>
 
-      <WorkSessionPanel
+      <WorkSessionPanel v-if="current.archived !== true"
         :workspace-id="current.id"
         :workspace-name="current.name"
         :active-workspace-name="activeWorkspaceName"
@@ -97,6 +97,7 @@
       <ResumeWorkCard
         :session="lastSession"
         :busy="resuming || starting"
+        :archived="current.archived === true"
         @resume="resumeLastWork"
       />
       <div v-if="resumeWorkspaceId === current.id" class="ws-resume-feedback">
@@ -110,9 +111,11 @@
           <p>这个工作空间的历史工作记录、备注与下一步；时长可以人工校正。</p>
         </div>
         <WorkspaceSessionHistory
+          :key="current.id"
           ref="sessionHistoryRef"
           :workspace-id="current.id"
           :workspace-name="current.name"
+          @adjusted="loadWorkspaces"
         />
       </section>
 
@@ -121,7 +124,8 @@
           <h2>当前任务</h2>
           <p>这个工作空间内的待办；其他页面的待办不受影响。</p>
         </div>
-        <TodoPanel :workspace-id="current.id" />
+        <TodoPanel v-if="current.archived !== true" :key="current.id" ref="todoPanelRef" :workspace-id="current.id" @changed="refreshWorkspaceData" />
+        <p v-else>已归档；可在相关资源中查看任务。</p>
       </section>
 
       <section class="ws-section">
@@ -129,7 +133,8 @@
           <h2>长期目标</h2>
           <p>属于这个工作空间的长期目标，自动生成的待办会继承同样的归属。</p>
         </div>
-        <GoalPanel :workspace-id="current.id" />
+        <GoalPanel v-if="current.archived !== true" :key="current.id" ref="goalPanelRef" :workspace-id="current.id" @changed="refreshWorkspaceData" />
+        <p v-else>已归档；可在相关资源中查看目标。</p>
       </section>
 
       <section class="ws-section">
@@ -138,9 +143,12 @@
           <p>文件、便签、收藏与快捷应用。关联只改变归属，不会复制内容。</p>
         </div>
         <WorkspaceResources
+          :key="current.id"
+          ref="resourcesRef"
           :workspace-id="current.id"
           :workspaces="workspaces"
-          @changed="loadWorkspaces"
+          :archived="current.archived === true"
+          @changed="refreshLinkedResources"
         />
       </section>
 
@@ -149,7 +157,7 @@
           <h2>工作流</h2>
           <p>绑定这个工作空间会用到的工作流；「继续上次工作」最多自动运行一个。</p>
         </div>
-        <WorkspaceWorkflows :workspace="current" :workflows="workflows" :busy="resuming" />
+        <WorkspaceWorkflows :key="current.id" :workspace="current" :workflows="workflows" :busy="resuming" :archived="current.archived === true" />
       </section>
     </template>
 
@@ -232,6 +240,25 @@ const showEndModal = ref(false);
 const sessionTodos = ref([]);
 const lastSession = ref(null);
 const sessionHistoryRef = ref(null);
+const resourcesRef = ref(null);
+const todoPanelRef = ref(null);
+const goalPanelRef = ref(null);
+let workspaceListGeneration = 0;
+let lastSessionGeneration = 0;
+
+async function refreshWorkspaceData() {
+  await loadWorkspaces();
+  if (resourcesRef.value && typeof resourcesRef.value.refresh === 'function') await resourcesRef.value.refresh();
+  await reloadSessionHistory();
+}
+
+async function refreshLinkedResources() {
+  await loadWorkspaces();
+  await Promise.all([
+    todoPanelRef.value && todoPanelRef.value.reload ? todoPanelRef.value.reload() : null,
+    goalPanelRef.value && goalPanelRef.value.reload ? goalPanelRef.value.reload() : null
+  ]);
+}
 
 async function reloadSessionHistory() {
   const target = sessionHistoryRef.value;
@@ -263,17 +290,19 @@ const sessionWorkspaceName = computed(() => {
 });
 
 async function loadWorkspaces() {
+  const generation = ++workspaceListGeneration;
+  const includeArchived = showArchived.value;
   try {
-    const list = await workbench.workspaces.list({ includeArchived: showArchived.value });
+    const list = await workbench.workspaces.list({ includeArchived });
+    if (!mounted || generation !== workspaceListGeneration || includeArchived !== showArchived.value) return;
     setWorkspaceList(list);
     ensureSelectionValid();
   } catch (error) {
-    toast(error.message, 'error');
-    setWorkspaceList([]);
+    if (mounted && generation === workspaceListGeneration) { toast(error.message, 'error'); setWorkspaceList([]); }
   } finally {
-    loading.value = false;
+    if (mounted && generation === workspaceListGeneration) loading.value = false;
   }
-  await loadLastSession();
+  if (mounted && generation === workspaceListGeneration) await loadLastSession();
 }
 
 function loadWorkflows() {
@@ -370,7 +399,7 @@ async function loadSessionTodos() {
 }
 
 async function startWork() {
-  if (!current.value || starting.value || resuming.value) return;
+  if (!current.value || current.value.archived === true || starting.value || resuming.value) return;
   starting.value = true;
   try {
     const result = await startSession(current.value.id);
@@ -421,14 +450,17 @@ async function goActiveWorkspace() {
 /* ------------------------- 上次工作快照 ------------------------- */
 
 async function loadLastSession() {
+  const generation = ++lastSessionGeneration;
+  const workspaceId = current.value && current.value.id;
   if (!current.value) {
     lastSession.value = null;
     return;
   }
   try {
-    lastSession.value = await workbench.sessions.last(current.value.id);
+    const session = await workbench.sessions.last(workspaceId);
+    if (mounted && generation === lastSessionGeneration && current.value && current.value.id === workspaceId) lastSession.value = session;
   } catch (_) {
-    lastSession.value = null;
+    if (mounted && generation === lastSessionGeneration && current.value && current.value.id === workspaceId) lastSession.value = null;
   }
 }
 
@@ -440,7 +472,7 @@ async function loadLastSession() {
  * 4) 工作流失败不回滚会话，只提示"部分工作环境未能打开"
  */
 async function resumeLastWork() {
-  if (!current.value || resuming.value || starting.value) return;
+  if (!current.value || current.value.archived === true || resuming.value || starting.value) return;
   const workspace = current.value;
   const workspaceId = workspace.id;
   const attempt = { generation: ++resumeGeneration, workspaceId };
@@ -476,6 +508,8 @@ async function resumeLastWork() {
 }
 
 watch(activeWorkspaceId, () => {
+  lastSessionGeneration++;
+  lastSession.value = null;
   invalidateResumeAttempt();
   resumeFeedback.value = null;
   resumeNotice.value = '';
@@ -498,6 +532,8 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   mounted = false;
+  workspaceListGeneration++;
+  lastSessionGeneration++;
   invalidateResumeAttempt();
 });
 </script>
