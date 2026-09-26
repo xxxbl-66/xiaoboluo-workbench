@@ -52,6 +52,50 @@ function isSafeExternalUrl(url) {
   }
 }
 
+function normalizeWorkflowInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('工作流数据无效');
+  }
+  if (typeof input.name !== 'string' || !input.name.trim()) {
+    throw new Error('工作流名称不能为空');
+  }
+  const name = input.name.trim();
+  if (name.length > 80) throw new Error('工作流名称不能超过 80 个字');
+  if (!Array.isArray(input.steps)) throw new Error('工作流步骤必须是数组');
+  if (!input.steps.length) throw new Error('工作流至少需要一个步骤');
+
+  const steps = Array.from(input.steps, (step, index) => {
+    const number = `第 ${index + 1} 步`;
+    if (!step || typeof step !== 'object' || Array.isArray(step)) {
+      throw new Error(`${number}的数据无效`);
+    }
+    if (!['app', 'file', 'url'].includes(step.type)) {
+      throw new Error(`${number}的类型不受支持`);
+    }
+    const normalized = { ...step };
+    if (step.type === 'app') {
+      if (typeof step.appId !== 'string' || !step.appId.trim()) {
+        throw new Error(`${number}尚未选择应用`);
+      }
+      normalized.appId = step.appId.trim();
+    } else if (step.type === 'file') {
+      if (typeof step.path !== 'string' || !step.path.trim()) {
+        throw new Error(`${number}尚未选择文件或文件夹`);
+      }
+    } else {
+      if (typeof step.url !== 'string' || !step.url.trim()) {
+        throw new Error(`${number}的网址不能为空`);
+      }
+      if (!isSafeExternalUrl(step.url)) {
+        throw new Error(`${number}只支持有效的 http:// 或 https:// 网址`);
+      }
+      normalized.url = step.url.trim();
+    }
+    return normalized;
+  });
+  return { name, steps };
+}
+
 async function openExternal(url) {
   if (!isSafeExternalUrl(url)) {
     return { ok: false, error: '只支持打开 http 或 https 链接' };
@@ -157,5 +201,6 @@ module.exports = {
   revealPath,
   openExternal,
   isSafeExternalUrl,
+  normalizeWorkflowInput,
   runWorkflow
 };

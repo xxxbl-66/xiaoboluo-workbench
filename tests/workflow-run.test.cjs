@@ -333,10 +333,12 @@ test('P1-01-7 URL 工作流失败后，Session 仍保持 active（继续工作�
     assert.equal(active.id, started.session.id, '工作流成功后 Session 必须仍然 active');
 
     // 换成会失败的工作流（非法协议），Session 不能被回滚
-    const badWf = await invoke('workflows:create', {
-      name: '坏环境',
+    const badWf = {
+      id: 'legacy-ftp-workflow', name: '坏环境',
       steps: [{ id: 's1', type: 'url', url: 'ftp://example.com/x', path: '', appId: '' }]
-    });
+    };
+    const legacyStore = new DataStore(path.join(workRoot, 'documents', '小菠萝的工作台'));
+    legacyStore.write('workflows.json', [...legacyStore.read('workflows.json', []), badWf]);
     await assert.rejects(() => invoke('workflows:run', badWf.id), /http/);
 
     active = await invoke('sessions:get-active');

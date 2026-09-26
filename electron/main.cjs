@@ -1039,11 +1039,12 @@ function registerIpc() {
 
   safeHandle('workflows:list', () => launcherService.readWorkflows(store));
   safeHandle('workflows:create', (workflow) => {
+    const input = launcherService.normalizeWorkflowInput(workflow);
     const items = launcherService.readWorkflows(store);
     const entry = {
       id: id(),
-      name: workflow.name || '未命名工作流',
-      steps: Array.isArray(workflow.steps) ? workflow.steps : [],
+      name: input.name,
+      steps: input.steps,
       sort: Date.now(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -1056,7 +1057,17 @@ function registerIpc() {
     const items = launcherService.readWorkflows(store);
     const index = items.findIndex((item) => item.id === workflowId);
     if (index === -1) throw new Error('工作流不存在');
-    items[index] = { ...items[index], ...patch, updatedAt: new Date().toISOString() };
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      throw new Error('工作流修改数据无效');
+    }
+    const blocked = Object.keys(patch).filter((key) => !['name', 'steps'].includes(key));
+    if (blocked.length) throw new Error(`不允许修改工作流字段：${blocked.join('、')}`);
+    const current = items[index];
+    const input = launcherService.normalizeWorkflowInput({
+      name: Object.prototype.hasOwnProperty.call(patch, 'name') ? patch.name : current.name,
+      steps: Object.prototype.hasOwnProperty.call(patch, 'steps') ? patch.steps : current.steps
+    });
+    items[index] = { ...current, ...input, updatedAt: new Date().toISOString() };
     launcherService.writeWorkflows(store, items);
     return items[index];
   });

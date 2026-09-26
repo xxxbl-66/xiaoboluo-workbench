@@ -192,7 +192,7 @@ import { useWorkspace } from '../composables/useWorkspace.js';
 import { useWorkSession } from '../composables/useWorkSession.js';
 import { toast } from '../composables/toast.js';
 import { formatDuration, formatRelative } from '../utils/duration.js';
-import { resumeWorkspaceWorkflow } from '../utils/workflow-resume.mjs';
+import { createWorkflowListLoader, resumeWorkspaceWorkflow } from '../utils/workflow-resume.mjs';
 
 defineProps({
   settings: { type: Object, default: () => ({}) }
@@ -212,6 +212,10 @@ const resumeFeedback = ref(null);
 const resumeNotice = ref('');
 const resumeWorkspaceId = ref(null);
 let mounted = true;
+const workflowLoader = createWorkflowListLoader(
+  () => workbench.workflows.list(),
+  (list) => { if (mounted) workflows.value = list; }
+);
 const ending = ref(false);
 const showEndModal = ref(false);
 const sessionTodos = ref([]);
@@ -261,12 +265,8 @@ async function loadWorkspaces() {
   await loadLastSession();
 }
 
-async function loadWorkflows() {
-  try {
-    workflows.value = await workbench.workflows.list();
-  } catch (_) {
-    workflows.value = [];
-  }
+function loadWorkflows() {
+  return workflowLoader.load();
 }
 
 function openCreate() {
@@ -439,7 +439,7 @@ async function resumeLastWork() {
   try {
     const result = await resumeWorkspaceWorkflow({
       workspace,
-      workflows: workflows.value,
+      loadWorkflows,
       startSession,
       runDetailed: workbench.workflows.runDetailed,
       onStarted: async () => {
@@ -476,7 +476,7 @@ watch(showArchived, () => {
 
 onMounted(() => {
   loadWorkspaces();
-  loadWorkflows();
+  loadWorkflows().catch(() => { /* 恢复操作会单独报告读取失败 */ });
 });
 onBeforeUnmount(() => { mounted = false; });
 </script>

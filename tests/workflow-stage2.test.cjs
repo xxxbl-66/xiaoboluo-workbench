@@ -136,15 +136,16 @@ test('详细 IPC 返回部分成功，旧 run 仍在步骤失败时 reject', asy
 test('旧数据中的未知步骤显示失败，后续步骤继续；空步骤明确拒绝', async () => {
   const ctx = await boot('stage2-legacy-');
   try {
-    const workflow = await ctx.invoke('workflows:create', { name: '旧流程', steps: [
+    const workflow = { id: 'legacy-unknown', name: '旧流程', steps: [
       { id: 'old', type: 'legacy' },
       { id: 'next', type: 'url', url: 'http://example.com/' }
-    ] });
+    ] };
+    const empty = { id: 'legacy-empty', name: '空旧流程', steps: [] };
+    new DataStore(ctx.dataDir).write('workflows.json', [workflow, empty]);
     const result = await ctx.invoke('workflows:run-detailed', workflow.id);
     assert.deepEqual(result.steps.map((step) => step.ok), [false, true]);
     assert.equal(result.steps[0].id, 'old');
     assert.equal(result.steps[1].id, 'next');
-    const empty = await ctx.invoke('workflows:create', { name: '空旧流程', steps: [] });
     await assert.rejects(() => ctx.invoke('workflows:run-detailed', empty.id), /没有可执行步骤/);
   } finally { ctx.teardown(); }
 });
@@ -152,10 +153,11 @@ test('旧数据中的未知步骤显示失败，后续步骤继续；空步骤�
 test('全部失败时数量准确，非法网址与缺失应用逐步返回原因', async () => {
   const ctx = await boot('stage2-failure-');
   try {
-    const workflow = await ctx.invoke('workflows:create', { name: '全部失败', steps: [
+    const workflow = { id: 'legacy-invalid-url', name: '全部失败', steps: [
       { id: 'a', type: 'app', appId: 'missing' },
       { id: 'u', type: 'url', url: 'javascript:alert(1)' }
-    ] });
+    ] };
+    new DataStore(ctx.dataDir).write('workflows.json', [workflow]);
     const result = await ctx.invoke('workflows:run-detailed', workflow.id);
     assert.equal(result.ok, false);
     assert.equal(result.successCount, 0);
