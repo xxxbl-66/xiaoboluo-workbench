@@ -7,12 +7,30 @@ const esbuild = require('esbuild');
 const fs = require('node:fs');
 const { createHost } = require('./helpers/vue-host.cjs');
 
-async function loadComponent(name) {
+async function loadComponent(name, options = {}) {
   const filename = path.join(__dirname, '..', 'src/renderer/src', name === 'WorkspaceView.vue' ? 'views' : 'components', name);
   const result = await esbuild.build({
     entryPoints: [filename], bundle: true, platform: 'node', format: 'cjs', write: false,
     external: ['vue'],
-    plugins: [{ name: 'vue-test', setup(build) {
+    plugins: [{ name: 'required-fix-mocks', setup(build) {
+      if (options.captureToast) {
+        build.onLoad({ filter: /[\\/]composables[\\/]toast\.js$/ }, () => ({
+          contents: 'export function toast(message, type = "info") { globalThis.__testToastCalls.push({ message, type }); }',
+          loader: 'js'
+        }));
+      }
+      if (options.mockActiveSession) {
+        build.onLoad({ filter: /[\\/]composables[\\/]useWorkSession\.js$/ }, () => ({
+          contents: `import { ref, computed } from 'vue';
+            const activeSession = ref(globalThis.__testActiveSession);
+            const elapsedSeconds = ref(0);
+            const isWorking = computed(() => Boolean(activeSession.value && !activeSession.value.endedAt));
+            export function useWorkSession() { return { activeSession, elapsedSeconds, isWorking,
+              startSession: async () => {}, endSession: async () => {} }; }`,
+          loader: 'js'
+        }));
+      }
+    } }, { name: 'vue-test', setup(build) {
       build.onLoad({ filter: /\.vue$/ }, (args) => {
         const descriptor = parse(fs.readFileSync(args.path, 'utf8'), { filename: args.path }).descriptor;
         return { contents: compileScript(descriptor, { id: 'test', inlineTemplate: true }).content, loader: 'js' };
@@ -25,6 +43,78 @@ async function loadComponent(name) {
   loaded._compile(result.outputFiles[0].text, filename);
   return loaded.exports.default;
 }
+
+test('WorkspaceView shows archive rejection without success feedback or leaving Workspace', async () => {
+  const originalWindow = global.window;
+  const originalCalls = global.__testToastCalls;
+  const calls = [];
+  global.__testToastCalls = calls;
+  global.window = { workbench: {
+    workspaces: {
+      list: async () => [{ id: 'A', name: '项目 A', archived: false, pendingTodoCount: 0, totalSeconds: 0 }],
+      touch: async () => true,
+      archive: async () => { throw new Error('当前工作空间还有正在进行的工作，请先结束工作后再归档'); }
+    },
+    workflows: { list: async () => [] },
+    sessions: { last: async () => null, history: async () => [] },
+    todos: { list: async () => [] }, goals: { list: async () => [] },
+    files: { favorites: { list: async () => [] }, notes: { list: async () => [] } },
+    bookmarks: { list: async () => [] }, apps: { list: async () => [] },
+    system: { pathExistsBatch: async () => ({}) }
+  } };
+  const { createRenderer, nextTick } = await import('vue');
+  let app;
+  try {
+    const host = createHost(createRenderer);
+    app = host.renderer.createApp(await loadComponent('WorkspaceView.vue', { captureToast: true }));
+    app.mount(host.root);
+    await new Promise(setImmediate); await nextTick();
+    host.click(host.find('button', '进入'));
+    await new Promise(setImmediate); await nextTick();
+    host.click(host.find('button', '归档'));
+    await new Promise(setImmediate); await nextTick();
+    assert.deepEqual(calls, [{ message: '当前工作空间还有正在进行的工作，请先结束工作后再归档', type: 'error' }]);
+    assert.match(host.content(host.root), /WORKSPACE \/ 项目 A/);
+    assert.ok(host.find('button', '归档'));
+  } finally {
+    app?.unmount(); global.window = originalWindow; global.__testToastCalls = originalCalls;
+  }
+});
+
+test('WorkspaceView keeps the end action for an old archived Workspace with active Session', async () => {
+  const originalWindow = global.window;
+  const originalActive = global.__testActiveSession;
+  global.__testActiveSession = { id: 's1', workspaceId: 'A', startedAt: new Date().toISOString(), endedAt: null };
+  global.window = { workbench: {
+    workspaces: {
+      list: async () => [{ id: 'A', name: '旧归档项目', archived: true, pendingTodoCount: 0, totalSeconds: 0 }],
+      touch: async () => true
+    },
+    workflows: { list: async () => [] },
+    sessions: { last: async () => null, history: async () => [] },
+    todos: { list: async () => [] }, goals: { list: async () => [] },
+    files: { favorites: { list: async () => [] }, notes: { list: async () => [] } },
+    bookmarks: { list: async () => [] }, apps: { list: async () => [] },
+    system: { pathExistsBatch: async () => ({}) }
+  } };
+  const { createRenderer, nextTick } = await import('vue');
+  let app;
+  try {
+    const host = createHost(createRenderer);
+    app = host.renderer.createApp(await loadComponent('WorkspaceView.vue', { mockActiveSession: true }));
+    app.mount(host.root);
+    await new Promise(setImmediate); await nextTick();
+    host.click(host.find('button', '查看'));
+    await new Promise(setImmediate); await nextTick();
+    assert.ok(host.find('button', '结束工作'));
+    assert.equal(host.find('button', '开始工作'), undefined);
+    host.click(host.find('button', '结束工作'));
+    await new Promise(setImmediate); await nextTick();
+    assert.match(host.content(host.body), /结束/);
+  } finally {
+    app?.unmount(); global.window = originalWindow; global.__testActiveSession = originalActive;
+  }
+});
 
 test('WorkspaceResources filters current tab and opens and saves the same Note ID', async () => {
   const originalWindow = global.window;

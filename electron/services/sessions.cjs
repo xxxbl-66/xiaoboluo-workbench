@@ -230,8 +230,8 @@ function resumeSession(store, sessionId) {
 }
 
 /**
- * 更新会话的可变字段。id / startedAt / createdAt 受保护。
- * endedAt 与 durationSeconds 由 endSession 负责，这里只允许修正文字内容。
+ * 只允许修正文字内容与完成事项。会话的工作空间在创建时确定，不能迁移。
+ * endedAt 与 durationSeconds 分别由 endSession 和 adjustSessionDuration 负责。
  */
 function updateSession(store, sessionId, patch = {}, todos) {
   const items = readSessions(store);
@@ -239,23 +239,21 @@ function updateSession(store, sessionId, patch = {}, todos) {
   if (index === -1) throw new Error('工作记录不存在');
 
   const current = items[index];
+  if (Object.prototype.hasOwnProperty.call(patch, 'workspaceId')) {
+    throw new Error('工作记录所属工作空间不可修改');
+  }
   const next = { ...current };
 
   if (patch.note !== undefined) next.note = String(patch.note || '');
   if (patch.nextStep !== undefined) next.nextStep = String(patch.nextStep || '');
   if (patch.completedTodoIds !== undefined) {
-    next.completedTodoIds = normalizeTodoIds(patch.completedTodoIds) || [];
-    if (todos) {
-      const previous = new Map((Array.isArray(current.completedTodoSnapshots) ? current.completedTodoSnapshots : [])
-        .filter((snapshot) => snapshot && snapshot.id)
-        .map((snapshot) => [snapshot.id, snapshot]));
-      const todoById = new Map(todos.filter((todo) => todo && todo.id).map((todo) => [todo.id, todo]));
-      next.completedTodoSnapshots = next.completedTodoIds.map((todoId) => previous.get(todoId) || {
-        id: todoId, title: String(todoById.get(todoId).title ?? '')
-      });
-    }
+    if (!Array.isArray(todos)) throw new Error('无法校验完成事项');
+    next.completedTodoIds = assertTodosInScope(current, todos, patch.completedTodoIds);
+    const todoById = new Map(todos.filter((todo) => todo && todo.id).map((todo) => [todo.id, todo]));
+    next.completedTodoSnapshots = next.completedTodoIds.map((todoId) => ({
+      id: todoId, title: String(todoById.get(todoId).title ?? '')
+    }));
   }
-  if (patch.workspaceId !== undefined) next.workspaceId = normalizeWorkspaceId(patch.workspaceId);
 
   next.id = current.id;
   next.startedAt = current.startedAt;

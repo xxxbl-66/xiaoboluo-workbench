@@ -84,7 +84,7 @@
         </div>
       </section>
 
-      <WorkSessionPanel v-if="current.archived !== true"
+      <WorkSessionPanel v-if="current.archived !== true || (activeSession && activeSession.workspaceId === current.id)"
         :workspace-id="current.id"
         :workspace-name="current.name"
         :active-workspace-name="activeWorkspaceName"

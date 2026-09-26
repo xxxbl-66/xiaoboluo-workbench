@@ -57,7 +57,7 @@ test('Session completion rejects foreign Todo and legacy history still resolves 
   } finally { ctx.teardown(); }
 });
 
-test('Session update keeps existing snapshot title and builds new IDs only from real Todos', async () => {
+test('Session update rebuilds all snapshot titles from real Todos when completed IDs change', async () => {
   const ctx = await boot('xb-stage3-');
   try {
     const workspace = await ctx.invoke('workspaces:create', { name: '竞赛' });
@@ -71,7 +71,7 @@ test('Session update keeps existing snapshot title and builds new IDs only from 
       completedTodoSnapshots: [{ id: second.id, title: '伪造新增' }]
     });
     assert.deepEqual(edited.completedTodoSnapshots, [
-      { id: first.id, title: '结束时标题' }, { id: second.id, title: '新增任务' }
+      { id: first.id, title: '后来改名' }, { id: second.id, title: '新增任务' }
     ]);
   } finally { ctx.teardown(); }
 });

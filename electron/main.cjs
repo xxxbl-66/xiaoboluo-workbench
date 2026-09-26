@@ -1336,13 +1336,22 @@ function registerIpc() {
 
   safeHandle('workspaces:create', (input) => workspaceService.createWorkspace(store, input || {}));
 
-  safeHandle('workspaces:update', (workspaceId, patch) => (
-    workspaceService.updateWorkspace(store, workspaceId, patch || {})
-  ));
+  function assertWorkspaceCanArchive(workspaceId) {
+    const active = sessionService.getActiveSession(store);
+    if (active && workspaceService.normalizeWorkspaceId(active.workspaceId) === workspaceService.normalizeWorkspaceId(workspaceId)) {
+      throw new Error('当前工作空间还有正在进行的工作，请先结束工作后再归档');
+    }
+  }
 
-  safeHandle('workspaces:archive', (workspaceId, archived) => (
-    workspaceService.archiveWorkspace(store, workspaceId, archived !== false)
-  ));
+  safeHandle('workspaces:update', (workspaceId, patch) => {
+    if (patch && patch.archived === true) assertWorkspaceCanArchive(workspaceId);
+    return workspaceService.updateWorkspace(store, workspaceId, patch || {});
+  });
+
+  safeHandle('workspaces:archive', (workspaceId, archived) => {
+    if (archived !== false) assertWorkspaceCanArchive(workspaceId);
+    return workspaceService.archiveWorkspace(store, workspaceId, archived !== false);
+  });
 
   safeHandle('workspaces:reorder', (orderedIds) => workspaceService.reorderWorkspaces(store, orderedIds));
 
