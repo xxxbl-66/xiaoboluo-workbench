@@ -26,9 +26,17 @@ export function createWorkflowListLoader(fetchWorkflows, onLoaded) {
 }
 
 /** 有默认工作流时先确认列表可用，再建立 Session；执行失败只改变本次反馈。 */
-export async function resumeWorkspaceWorkflow({ workspace, workflows = [], loadWorkflows, startSession, onStarted, runDetailed }) {
+export async function resumeWorkspaceWorkflow({ workspace, workflows = [], loadWorkflows, isCurrent, startSession, onStarted, runDetailed }) {
   const resumeId = workspace.resumeWorkflowId;
   const availableWorkflows = resumeId && loadWorkflows ? await loadWorkflows() : workflows;
+  const boundIds = Array.isArray(workspace.workflowIds) ? workspace.workflowIds : [];
+  const workflow = resumeId ? availableWorkflows.find((item) => item.id === resumeId) : null;
+  if (isCurrent && !isCurrent()) {
+    return { cancelled: true, started: false, notice: '', feedback: null };
+  }
+  if (resumeId && (!boundIds.includes(resumeId) || !workflow)) {
+    return { started: false, notice: '默认工作流已失效，请编辑工作空间重新选择。', feedback: null };
+  }
   const started = await startSession(workspace.id);
   if (started?.started === false) {
     return { started: false, notice: '已有正在进行的工作，请先结束或返回那一项。', feedback: null };
@@ -38,11 +46,6 @@ export async function resumeWorkspaceWorkflow({ workspace, workflows = [], loadW
 
   if (!resumeId) {
     return { started: true, notice: '工作已开始，正在计时；未设置默认工作流，不会自动打开工作环境。', feedback: null };
-  }
-  const boundIds = Array.isArray(workspace.workflowIds) ? workspace.workflowIds : [];
-  const workflow = availableWorkflows.find((item) => item.id === resumeId);
-  if (!boundIds.includes(resumeId) || !workflow) {
-    return { started: true, notice: '工作已开始，正在计时；默认工作流已失效，请编辑工作空间重新选择。', feedback: null };
   }
   try {
     const result = await runDetailed(resumeId);

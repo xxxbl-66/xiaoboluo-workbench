@@ -212,6 +212,17 @@ const resumeFeedback = ref(null);
 const resumeNotice = ref('');
 const resumeWorkspaceId = ref(null);
 let mounted = true;
+let resumeGeneration = 0;
+let activeResumeAttempt = null;
+function isCurrentResumeAttempt(attempt) {
+  return mounted && activeResumeAttempt === attempt && resumeGeneration === attempt.generation
+    && activeWorkspaceId.value === attempt.workspaceId;
+}
+function invalidateResumeAttempt() {
+  resumeGeneration++;
+  activeResumeAttempt = null;
+  resuming.value = false;
+}
 const workflowLoader = createWorkflowListLoader(
   () => workbench.workflows.list(),
   (list) => { if (mounted) workflows.value = list; }
@@ -432,6 +443,8 @@ async function resumeLastWork() {
   if (!current.value || resuming.value || starting.value) return;
   const workspace = current.value;
   const workspaceId = workspace.id;
+  const attempt = { generation: ++resumeGeneration, workspaceId };
+  activeResumeAttempt = attempt;
   resuming.value = true;
   resumeWorkspaceId.value = workspaceId;
   resumeFeedback.value = null;
@@ -440,29 +453,34 @@ async function resumeLastWork() {
     const result = await resumeWorkspaceWorkflow({
       workspace,
       loadWorkflows,
+      isCurrent: () => isCurrentResumeAttempt(attempt),
       startSession,
       runDetailed: workbench.workflows.runDetailed,
       onStarted: async () => {
-        if (mounted && current.value?.id === workspaceId) resumeNotice.value = '工作已开始，正在计时；正在打开工作环境…';
+        if (isCurrentResumeAttempt(attempt)) resumeNotice.value = '工作已开始，正在计时；正在打开工作环境…';
         if (mounted) await loadWorkspaces();
       }
     });
-    if (mounted && current.value?.id === workspaceId) {
+    if (isCurrentResumeAttempt(attempt)) {
       resumeNotice.value = result.notice;
       resumeFeedback.value = result.feedback;
     }
   } catch (error) {
-    if (mounted && current.value?.id === workspaceId) resumeNotice.value = `开始工作失败：${error.message || '未知错误'}`;
+    if (isCurrentResumeAttempt(attempt)) resumeNotice.value = `开始工作失败：${error.message || '未知错误'}`;
   } finally {
-    resuming.value = false;
+    if (activeResumeAttempt === attempt) {
+      activeResumeAttempt = null;
+      resuming.value = false;
+    }
   }
 }
 
 watch(activeWorkspaceId, () => {
+  invalidateResumeAttempt();
   resumeFeedback.value = null;
   resumeNotice.value = '';
   resumeWorkspaceId.value = null;
-});
+}, { flush: 'sync' });
 
 // 进入详情时刷新一次，保证计数与最近工作信息是最新的
 watch(activeWorkspaceId, (value) => {
@@ -478,7 +496,10 @@ onMounted(() => {
   loadWorkspaces();
   loadWorkflows().catch(() => { /* 恢复操作会单独报告读取失败 */ });
 });
-onBeforeUnmount(() => { mounted = false; });
+onBeforeUnmount(() => {
+  mounted = false;
+  invalidateResumeAttempt();
+});
 </script>
 
 <style scoped>

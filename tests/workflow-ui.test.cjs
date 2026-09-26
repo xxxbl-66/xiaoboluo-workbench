@@ -90,7 +90,7 @@ test('Workspace 页面先显示但工作流列表延迟时，立即继续会等�
   }
 });
 
-test('Workspace A 等待列表时切到 B，A 的恢复结果不会显示在 B', async () => {
+test('Workspace A 等待列表时切到 B，A 不创建 Session 或执行工作流', async () => {
   const vue = require('vue');
   const originalSetInterval = globalThis.setInterval;
   globalThis.setInterval = () => ({ fake: true });
@@ -131,10 +131,295 @@ test('Workspace A 等待列表时切到 B，A 的恢复结果不会显示在 B',
     resolveList([{ id: 'wf-a', name: 'A 恢复结果' }, { id: 'wf-b', name: 'B 恢复结果' }]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await vue.nextTick();
-    assert.equal(starts, 1);
-    assert.equal(runs, 1);
+    assert.equal(starts, 0);
+    assert.equal(runs, 0);
     assert.match(textOf(root), /WORKSPACE \/ B/);
     assert.doesNotMatch(textOf(root), /A 恢复结果/);
+    app.unmount();
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    delete global.window;
+  }
+});
+
+test('A 等待时切到 B 并立即继续，旧 A 不清理 B 的忙碌状态或结果', async () => {
+  const vue = require('vue');
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = () => ({ fake: true });
+  let resolveList;
+  let finishB;
+  const starts = [];
+  const runs = [];
+  const workflowList = new Promise((resolve) => { resolveList = resolve; });
+  const workspaces = [
+    { id: 'ws-a', name: 'A', workflowIds: ['wf-a'], resumeWorkflowId: 'wf-a' },
+    { id: 'ws-b', name: 'B', workflowIds: ['wf-b'], resumeWorkflowId: 'wf-b' }
+  ];
+  global.window = { workbench: {
+    workspaces: { list: async () => workspaces, touch: async () => {} },
+    workflows: { list: () => workflowList, runDetailed: (id) => {
+      runs.push(id);
+      return new Promise((resolve) => { finishB = resolve; });
+    } },
+    sessions: {
+      last: async () => ({ id: 'previous', startedAt: new Date().toISOString(), durationSeconds: 1 }),
+      start: async (id) => {
+        starts.push(id);
+        return { started: true, session: { id: `session-${id}`, workspaceId: id, startedAt: new Date().toISOString(), endedAt: null } };
+      }
+    }
+  } };
+  try {
+    const Component = await loadComponent('src/renderer/src/views/WorkspaceView.vue', true);
+    const { renderer, node, textOf, find } = hostRenderer(vue);
+    const root = node('root');
+    const app = renderer.createApp(Component);
+    app.mount(root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item) === '打开工作空间 ws-a').props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item).includes('继续上次工作')).props.onClick();
+    find(root, (item) => item.type === 'button' && textOf(item).includes('全部工作空间')).props.onClick();
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item) === '打开工作空间 ws-b').props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    const resumeB = find(root, (item) => item.type === 'button' && /继续上次工作|正在恢复/.test(textOf(item)));
+    assert.ok(resumeB, textOf(root));
+    assert.equal(resumeB.props.disabled, false, 'B 不应等待 A 的恢复意图结束');
+    resumeB.props.onClick();
+    resolveList([{ id: 'wf-a', name: 'A 流程' }, { id: 'wf-b', name: 'B 流程' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    assert.deepEqual(starts, ['ws-b']);
+    assert.deepEqual(runs, ['wf-b']);
+    assert.match(textOf(root), /正在恢复…/, 'A 的旧 finally 不能清掉 B 的忙碌状态');
+    finishB({ ok: true, totalCount: 1, successCount: 1, failedCount: 0, steps: [{ index: 0, type: 'url', label: 'B 结果', ok: true }] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    assert.match(textOf(root), /B 流程全部成功/);
+    assert.doesNotMatch(textOf(root), /A 流程/);
+    app.unmount();
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    delete global.window;
+  }
+});
+
+test('A1 等待时切 B 再回 A，只有新 A2 能启动 Session 和工作流', async () => {
+  const vue = require('vue');
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = () => ({ fake: true });
+  let resolveList;
+  const starts = [];
+  const runs = [];
+  const workflowList = new Promise((resolve) => { resolveList = resolve; });
+  const workspaces = [
+    { id: 'ws-a', name: 'A', workflowIds: ['wf-a'], resumeWorkflowId: 'wf-a' },
+    { id: 'ws-b', name: 'B', workflowIds: ['wf-b'], resumeWorkflowId: 'wf-b' }
+  ];
+  global.window = { workbench: {
+    workspaces: { list: async () => workspaces, touch: async () => {} },
+    workflows: { list: () => workflowList, runDetailed: async (id) => {
+      runs.push(id);
+      return { ok: true, totalCount: 1, successCount: 1, failedCount: 0, steps: [] };
+    } },
+    sessions: {
+      last: async () => ({ id: 'previous', startedAt: new Date().toISOString(), durationSeconds: 1 }),
+      start: async (id) => {
+        starts.push(id);
+        return { started: true, session: { id: `session-${id}`, workspaceId: id, startedAt: new Date().toISOString(), endedAt: null } };
+      }
+    }
+  } };
+  try {
+    const Component = await loadComponent('src/renderer/src/views/WorkspaceView.vue', true);
+    const { renderer, node, textOf, find } = hostRenderer(vue);
+    const root = node('root');
+    const app = renderer.createApp(Component);
+    app.mount(root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    const open = async (id) => {
+      find(root, (item) => item.type === 'button' && textOf(item) === `打开工作空间 ${id}`).props.onClick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vue.nextTick();
+    };
+    const back = async () => {
+      find(root, (item) => item.type === 'button' && textOf(item).includes('全部工作空间')).props.onClick();
+      await vue.nextTick();
+    };
+    await open('ws-a');
+    find(root, (item) => item.type === 'button' && textOf(item).includes('继续上次工作')).props.onClick();
+    await back();
+    await open('ws-b');
+    await back();
+    await open('ws-a');
+    const resumeA2 = find(root, (item) => item.type === 'button' && /继续上次工作|正在恢复/.test(textOf(item)));
+    assert.ok(resumeA2, textOf(root));
+    assert.equal(resumeA2.props.disabled, false);
+    resumeA2.props.onClick();
+    resolveList([{ id: 'wf-a', name: 'A 流程' }, { id: 'wf-b', name: 'B 流程' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    assert.deepEqual(starts, ['ws-a']);
+    assert.deepEqual(runs, ['wf-a']);
+    app.unmount();
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    delete global.window;
+  }
+});
+
+test('WorkspaceView 卸载时等待中的恢复不会创建 Session 或运行工作流', async () => {
+  const vue = require('vue');
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = () => ({ fake: true });
+  let resolveList;
+  let starts = 0;
+  let runs = 0;
+  const workflowList = new Promise((resolve) => { resolveList = resolve; });
+  global.window = { workbench: {
+    workspaces: { list: async () => [{ id: 'ws-a', name: 'A', workflowIds: ['wf-a'], resumeWorkflowId: 'wf-a' }], touch: async () => {} },
+    workflows: { list: () => workflowList, runDetailed: async () => { runs++; return { ok: true, steps: [] }; } },
+    sessions: {
+      last: async () => ({ id: 'previous', startedAt: new Date().toISOString(), durationSeconds: 1 }),
+      start: async () => { starts++; return { started: true, session: { id: 's' } }; }
+    }
+  } };
+  try {
+    const Component = await loadComponent('src/renderer/src/views/WorkspaceView.vue', true);
+    const { renderer, node, textOf, find } = hostRenderer(vue);
+    const root = node('root');
+    const app = renderer.createApp(Component);
+    app.mount(root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item) === '打开工作空间 ws-a').props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item).includes('继续上次工作')).props.onClick();
+    app.unmount();
+    resolveList([{ id: 'wf-a', name: 'A 流程' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(starts, 0);
+    assert.equal(runs, 0);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    delete global.window;
+  }
+});
+
+test('Session 已创建后切到 B，A 工作流继续完成但结果不写入 B', async () => {
+  const vue = require('vue');
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = () => ({ fake: true });
+  let finishA;
+  const starts = [];
+  const runs = [];
+  const workspaces = [
+    { id: 'ws-a', name: 'A', workflowIds: ['wf-a'], resumeWorkflowId: 'wf-a' },
+    { id: 'ws-b', name: 'B', workflowIds: [], resumeWorkflowId: null }
+  ];
+  global.window = { workbench: {
+    workspaces: { list: async () => workspaces, touch: async () => {} },
+    workflows: {
+      list: async () => [{ id: 'wf-a', name: 'A 流程' }],
+      runDetailed: (id) => {
+        runs.push(id);
+        return new Promise((resolve) => { finishA = resolve; });
+      }
+    },
+    sessions: {
+      last: async () => ({ id: 'previous', startedAt: new Date().toISOString(), durationSeconds: 1 }),
+      start: async (id) => {
+        starts.push(id);
+        return { started: true, session: { id: `session-${id}`, workspaceId: id, startedAt: new Date().toISOString(), endedAt: null } };
+      }
+    }
+  } };
+  try {
+    const Component = await loadComponent('src/renderer/src/views/WorkspaceView.vue', true);
+    const { renderer, node, textOf, find } = hostRenderer(vue);
+    const root = node('root');
+    const app = renderer.createApp(Component);
+    app.mount(root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item) === '打开工作空间 ws-a').props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item).includes('继续上次工作')).props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    assert.deepEqual(starts, ['ws-a']);
+    assert.deepEqual(runs, ['wf-a']);
+    find(root, (item) => item.type === 'button' && textOf(item).includes('全部工作空间')).props.onClick();
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item) === '打开工作空间 ws-b').props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    finishA({ ok: false, totalCount: 1, successCount: 0, failedCount: 1, steps: [{ index: 0, type: 'url', label: 'A 私有结果', ok: false, error: '失败' }] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    assert.deepEqual(starts, ['ws-a'], '已提交的 A Session 不回滚或重建');
+    assert.deepEqual(runs, ['wf-a']);
+    assert.match(textOf(root), /WORKSPACE \/ B/);
+    assert.doesNotMatch(textOf(root), /A 私有结果|A 流程/);
+    app.unmount();
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    delete global.window;
+  }
+});
+
+test('Workflow 读取失败不启动 Session，显示错误后可重试', async () => {
+  const vue = require('vue');
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = () => ({ fake: true });
+  let rejectList;
+  let fetches = 0;
+  let starts = 0;
+  let runs = 0;
+  const firstList = new Promise((_, reject) => { rejectList = reject; });
+  global.window = { workbench: {
+    workspaces: { list: async () => [{ id: 'ws-a', name: 'A', workflowIds: ['wf-a'], resumeWorkflowId: 'wf-a' }], touch: async () => {} },
+    workflows: {
+      list: () => ++fetches === 1 ? firstList : Promise.resolve([{ id: 'wf-a', name: 'A 流程' }]),
+      runDetailed: async () => { runs++; return { ok: true, totalCount: 1, successCount: 1, failedCount: 0, steps: [] }; }
+    },
+    sessions: {
+      last: async () => ({ id: 'previous', startedAt: new Date().toISOString(), durationSeconds: 1 }),
+      start: async () => ({ started: true, session: { id: `session-${++starts}`, workspaceId: 'ws-a', startedAt: new Date().toISOString(), endedAt: null } })
+    }
+  } };
+  try {
+    const Component = await loadComponent('src/renderer/src/views/WorkspaceView.vue', true);
+    const { renderer, node, textOf, find } = hostRenderer(vue);
+    const root = node('root');
+    const app = renderer.createApp(Component);
+    app.mount(root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item) === '打开工作空间 ws-a').props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item).includes('继续上次工作')).props.onClick();
+    rejectList(new Error('磁盘读取失败'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    assert.equal(starts, 0);
+    assert.equal(runs, 0);
+    assert.match(textOf(root), /磁盘读取失败/);
+    assert.doesNotMatch(textOf(root), /已失效/);
+    find(root, (item) => item.type === 'button' && textOf(item).includes('继续上次工作')).props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vue.nextTick();
+    assert.equal(fetches, 2);
+    assert.equal(starts, 1);
+    assert.equal(runs, 1);
     app.unmount();
   } finally {
     globalThis.setInterval = originalSetInterval;

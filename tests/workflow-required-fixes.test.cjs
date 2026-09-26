@@ -40,7 +40,7 @@ test('延迟加载时继续工作等待真实列表，只建立一条 Session �
   assert.doesNotMatch(a.notice + b.notice, /已失效/);
 });
 
-test('已加载空列表才报失效；无默认工作流无需加载也能开始', async () => {
+test('已加载空列表才报失效且不创建 Session；无默认工作流无需加载也能开始', async () => {
   const { createWorkflowListLoader, resumeWorkspaceWorkflow } = await resumeModule;
   const loader = createWorkflowListLoader(async () => []);
   let starts = 0;
@@ -53,12 +53,51 @@ test('已加载空列表才报失效；无默认工作流无需加载也能开�
   assert.equal(loader.state, 'loaded');
   assert.deepEqual(loader.items, []);
   assert.match(missing.notice, /已失效/);
+  assert.equal(starts, 0, '确认默认工作流不存在时不得创建 Session');
   const none = await resumeWorkspaceWorkflow({
     workspace: { id: 'B', workflowIds: [], resumeWorkflowId: null },
     loadWorkflows: async () => { throw new Error('无默认时不得读取列表'); }, startSession
   });
-  assert.equal(starts, 2);
+  assert.equal(starts, 1);
   assert.match(none.notice, /未设置默认工作流/);
+});
+
+test('失效的 A 恢复请求不会通过真实 sessions:start IPC 写入 Session，B 可正常开始', async () => {
+  const { createWorkflowListLoader, resumeWorkspaceWorkflow } = await resumeModule;
+  const ctx = await boot('workflow-resume-stale-ipc-');
+  try {
+    const workflow = await ctx.invoke('workflows:create', {
+      name: '恢复环境', steps: [{ id: 'step', type: 'url', url: 'https://example.com/' }]
+    });
+    const a = await ctx.invoke('workspaces:create', {
+      name: 'A', workflowIds: [workflow.id], resumeWorkflowId: workflow.id
+    });
+    const b = await ctx.invoke('workspaces:create', { name: 'B' });
+    const pendingList = deferred();
+    const loader = createWorkflowListLoader(() => pendingList.promise);
+    let selected = a.id;
+    const old = resumeWorkspaceWorkflow({
+      workspace: a, loadWorkflows: () => loader.load(),
+      isCurrent: () => selected === a.id,
+      startSession: (id) => ctx.invoke('sessions:start', id),
+      runDetailed: (id) => ctx.invoke('workflows:run-detailed', id)
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    selected = b.id;
+    pendingList.resolve(await ctx.invoke('workflows:list'));
+    const oldResult = await old;
+    assert.equal(oldResult.cancelled, true);
+    assert.equal(await ctx.invoke('sessions:get-active'), null, '失效 A 不得写入 active Session');
+    assert.deepEqual(await ctx.invoke('sessions:list'), [], '失效 A 不得写入历史 Session');
+    const current = await resumeWorkspaceWorkflow({
+      workspace: b, loadWorkflows: () => loader.load(),
+      isCurrent: () => selected === b.id,
+      startSession: (id) => ctx.invoke('sessions:start', id)
+    });
+    assert.equal(current.started, true);
+    assert.equal((await ctx.invoke('sessions:get-active')).workspaceId, b.id);
+    assert.equal((await ctx.invoke('sessions:list')).length, 1);
+  } finally { ctx.teardown(); }
 });
 
 test('列表读取失败不伪装成删除，且可重试；已有 active Session 不新建', async () => {
