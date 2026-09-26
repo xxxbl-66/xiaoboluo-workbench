@@ -353,7 +353,8 @@ test('WorkspaceResources selects file and folder, shows missing path and keeps c
       selectFile: async () => selectedFile,
       selectDirectory: async () => 'C:/project-dir',
       pathExistsBatch: async () => ({ 'C:/lost.txt': false })
-    }
+    },
+    workspaces: { linkResource: async ({ id, workspaceId }) => { favorites.find((item) => item.id === id).workspaceId = workspaceId; } }
   } };
   const { createRenderer, nextTick } = await import('vue');
   try {
@@ -374,6 +375,11 @@ test('WorkspaceResources selects file and folder, shows missing path and keeps c
     host.click(host.find('button', '选择文件'));
     await new Promise(setImmediate); await nextTick();
     assert.equal(picked.length, 2);
+    host.click(host.find('button', '解除关联'));
+    await new Promise(setImmediate); await nextTick();
+    assert.equal(favorites[0].workspaceId, null);
+    assert.equal(favorites.length, 3);
+    assert.doesNotMatch(host.content(host.root), /旧文件/);
     app.unmount();
   } finally { global.window = originalWindow; }
 });

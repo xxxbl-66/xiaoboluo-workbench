@@ -106,6 +106,16 @@ test('Workspace resource filter handles Chinese, case, paths, URL and empty quer
   assert.equal(rows.length, 3);
 });
 
+test('Shared Note save keeps empty content and does not replace workspace ownership', async () => {
+  const { saveNoteRecord } = await import(pathToFileURL(path.join(__dirname, '..', 'src/renderer/src/components/note-record.js')).href);
+  const calls = [];
+  const notesApi = { update: async (id, patch) => { calls.push({ id, patch }); return { id, ...patch, workspaceId: 'w1' }; } };
+  const saved = await saveNoteRecord(notesApi, 'n1', { title: '更新', content: '', workspaceId: 'other' });
+  assert.deepEqual(calls, [{ id: 'n1', patch: { title: '更新', content: '' } }]);
+  assert.equal(saved.workspaceId, 'w1');
+  await assert.rejects(saveNoteRecord({ update: async () => { throw new Error('写入失败'); } }, 'n1', { title: '草稿', content: '' }), /写入失败/);
+});
+
 test('Archived workspace keeps history but cannot start a new session until restored', async () => {
   const ctx = await boot('xb-stage3-');
   try {

@@ -46,6 +46,7 @@ import MarkdownRenderer from './MarkdownRenderer.vue';
 import LineIcon from './LineIcon.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
+import { saveNoteRecord } from './note-record.js';
 
 const notes = ref([]);
 const selectedId = ref(null);
@@ -96,10 +97,7 @@ function scheduleSave() {
 async function saveSelected() {
   if (!selected.value) return;
   try {
-    const note = await workbench.files.notes.update(selected.value.id, {
-      title: selected.value.title,
-      content: selected.value.content
-    });
+    const note = await saveNoteRecord(workbench.files.notes, selected.value.id, selected.value);
     const index = notes.value.findIndex((item) => item.id === note.id);
     if (index !== -1) notes.value[index] = note;
   } catch (error) {

@@ -133,6 +133,7 @@ import WorkspaceLinkModal from './WorkspaceLinkModal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 import { filterWorkspaceResourceRows } from './workspace-resource-filter.js';
+import { saveNoteRecord } from './note-record.js';
 
 const props = defineProps({
   workspaceId: { type: String, required: true },
@@ -379,7 +380,7 @@ async function saveNote() {
     const title = noteForm.value.title.trim();
     if (!title) throw new Error('请输入便签标题');
     if (editingNoteId.value) {
-      await workbench.files.notes.update(editingNoteId.value, { title, content: noteForm.value.content });
+      await saveNoteRecord(workbench.files.notes, editingNoteId.value, { title, content: noteForm.value.content });
     } else {
       await workbench.files.notes.create({ title, content: noteForm.value.content, workspaceId });
     }
