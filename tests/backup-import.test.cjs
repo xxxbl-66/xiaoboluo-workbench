@@ -270,6 +270,33 @@ test('P0-01-9 导入前会留下可恢复的恢复点文件', () => {
   }
 });
 
+test('P0-R2-01 恢复点无法创建时，在写入任何业务表前终止导入', () => {
+  const dir = tempDir();
+  try {
+    const store = new DataStore(dir);
+    store.write('todos.json', [{ id: 'before-import', title: '原有待办' }]);
+    store.write('notes.json', [{ id: 'before-import-note', title: '原有便签' }]);
+    const before = snapshotData(store);
+
+    const file = writeBackup(dir, {
+      'todos.json': [{ id: 'after-import' }],
+      'notes.json': [{ id: 'after-import-note' }]
+    });
+
+    // 使用真实文件系统制造恢复点创建失败：backups 路径存在，但不是目录。
+    fs.rmSync(store.backupsDir, { recursive: true, force: true });
+    fs.writeFileSync(store.backupsDir, 'blocked', 'utf8');
+
+    const result = importBackup(store, file);
+
+    assert.equal(result.ok, false, '没有持久恢复点时不得开始破坏性导入');
+    assert.match(result.error, /恢复点|取消导入/);
+    assert.deepEqual(snapshotData(store), before, '恢复点创建失败时所有数据必须逐字节不变');
+  } finally {
+    cleanup(dir);
+  }
+});
+
 /* ------------------------------------------------------------------ *
  * 5. 缺表语义：不清空用户现有表
  * ------------------------------------------------------------------ */

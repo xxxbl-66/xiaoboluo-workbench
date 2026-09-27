@@ -27,7 +27,7 @@
     "appId": "com.xiaoboluo.workbench",
     "productName": "四一四工作台",
     "directories": {
-      "output": "dist-release/v0.1.2"
+      "output": "dist-release/final-v0.1.2"
     },
     "files": [
       "electron/**/*",
@@ -47,10 +47,10 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "四一四工作台",
-      "artifactName": "四一四工作台-${version}-安装包.exe"
+      "artifactName": "四一四工作台_安装版.exe"
     },
     "portable": {
-      "artifactName": "四一四工作台-${version}-portable.exe"
+      "artifactName": "四一四工作台_便携版.exe"
     }
   }
 }
