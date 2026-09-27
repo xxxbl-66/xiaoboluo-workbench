@@ -39,7 +39,6 @@ let initialized = false;
 
 function isPendingRestoreDecision(session) {
   if (!session || session.endedAt) return false;
-  if (session.resumedAt) return false;
   const started = new Date(session.startedAt).getTime();
   if (!Number.isFinite(started)) return false;
   // 允许一点点时钟误差：只要不是本次启动之后新建的，就按"恢复出来的"处理
@@ -47,11 +46,17 @@ function isPendingRestoreDecision(session) {
 }
 
 function applySession(session) {
+  const keepDismissed = Boolean(
+    session && activeSession.value && activeSession.value.id === session.id && restorePromptDismissed.value
+  );
   activeSession.value = session || null;
   if (!activeSession.value) workflowOpeningSessionId.value = null;
   if (activeSession.value) {
     if (isPendingRestoreDecision(activeSession.value)) {
       needsRestoreDecision.value = true;
+      restorePromptDismissed.value = keepDismissed;
+    } else {
+      needsRestoreDecision.value = false;
       restorePromptDismissed.value = false;
     }
     startTicker();
@@ -185,6 +190,24 @@ async function endSession(patch = {}) {
   }
 }
 
+/** 恢复旧会话时，一次持久化完成结束和有效时长校正。 */
+async function endAndAdjustSession(seconds, options = {}) {
+  const session = activeSession.value;
+  if (!session) throw new Error('当前没有正在进行的工作');
+  loading.value = true;
+  error.value = '';
+  try {
+    const ended = await workbench.sessions.endAndAdjust(session.id, seconds, options);
+    applySession(null);
+    return ended;
+  } catch (err) {
+    error.value = err.message || '结束并校正工作失败';
+    throw err;
+  } finally {
+    loading.value = false;
+  }
+}
+
 function beginWorkflowOpening(sessionId) {
   if (activeSession.value?.id === sessionId) workflowOpeningSessionId.value = sessionId;
 }
@@ -212,6 +235,7 @@ export function useWorkSession() {
     dismissRestorePrompt,
     startSession,
     endSession,
+    endAndAdjustSession,
     refreshElapsed
   };
 }

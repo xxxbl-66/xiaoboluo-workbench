@@ -114,6 +114,7 @@ import { computed, onMounted, ref } from 'vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 import { runSave } from '../composables/save-result.js';
+import { saveCustomTone } from '../composables/settings-actions.js';
 
 const props = defineProps({
   settings: { type: Object, default: () => ({ extensions: {} }) }
@@ -208,10 +209,7 @@ async function chooseCustomTone() {
   try {
     const audio = await workbench.system.selectAudio();
     if (!audio) return;
-    await updateSettings({
-      timerRingtone: { type: 'custom', id: 'custom', name: audio.name, dataUrl: audio.dataUrl }
-    });
-    toast('自定义铃声已保存');
+    await saveCustomTone(audio, updateSettings, toast);
   } catch (error) {
     toast(error.message, 'error');
   }

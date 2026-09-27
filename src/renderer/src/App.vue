@@ -60,15 +60,16 @@
       v-model="showAdjustModal"
       :session="pendingAdjustTarget"
       :workspace-name="activeSessionName"
+      :finish-active="Boolean(pendingAdjustTarget && !pendingAdjustTarget.endedAt)"
       :adjust="adjustDurationCall"
-      @close="showAdjustModal = false"
+      @close="closeRestoredAdjustment"
       @adjusted="onRestoredSessionAdjusted"
     />
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import Sidebar from './components/Sidebar.vue';
 import ToastHost from './components/ToastHost.vue';
 import LineIcon from './components/LineIcon.vue';
@@ -103,6 +104,7 @@ const {
   initialize: initializeSession,
   resumeSession,
   endSession,
+  endAndAdjustSession,
   dismissRestorePrompt
 } = useWorkSession();
 
@@ -127,6 +129,7 @@ const restoreBusy = ref(false);
 const restoreError = ref('');
 const pendingAdjustTarget = ref(null);
 let removeCloseListener = null;
+let closeRequestId = null;
 
 const viewMap = {
   dashboard: DashboardView,
@@ -188,14 +191,17 @@ function dismissRestore() {
 
 /** 返回工作：取消关闭，窗口保持可用，计时继续 */
 function returnToWork() {
+  if (shutdownBusy.value) return;
   showShutdown.value = false;
   shutdownError.value = '';
-  workbench.sessions.respondClose(toCloseResponse('back'));
+  workbench.sessions.respondClose(toCloseResponse('back'), closeRequestId);
+  closeRequestId = null;
 }
 
 /** 保留会话并退出：允许关闭，会话保持未结束，下次启动会提示处理 */
 function keepSessionAndClose() {
-  workbench.sessions.respondClose(toCloseResponse('keep'));
+  workbench.sessions.respondClose(toCloseResponse('keep'), closeRequestId);
+  closeRequestId = null;
 }
 
 /** 结束工作：先进入现有结束 Session 流程，保存成功后才允许关闭 */
@@ -211,7 +217,8 @@ async function endWorkAndClose() {
     // 关闭场景没有待办勾选界面：沿用现有 end 流程，只提交空备注
     await endSession({ note: '', nextStep: '', completedTodoIds: [] });
     if (!shouldExitAfterClose('end', true)) return;
-    workbench.sessions.respondClose(toCloseResponse('end'));
+    workbench.sessions.respondClose(toCloseResponse('end'), closeRequestId);
+  closeRequestId = null;
     toast('本次工作已保存，正在关闭工作台');
   } catch (error) {
     // 保存失败绝不假装结束：保持窗口打开、保留会话，让用户重试
@@ -239,35 +246,32 @@ async function continueRestoredSession() {
   }
 }
 
-/**
- * 结束并校正时长。
- * 必须先把原 Session 正常结束（保留原始 startedAt），再对已结束记录做受控校正，
- * 绝不新建第二条 active 会话。
- */
-async function adjustRestoredSession() {
-  if (restoreBusy.value) return;
-  restoreBusy.value = true;
+/** 先收集有效时长；确认保存时才一次写盘结束并校正原会话。 */
+function adjustRestoredSession() {
+  if (restoreBusy.value || !activeSession.value) return;
   restoreError.value = '';
-  try {
-    const ended = await endSession({ note: '', nextStep: '', completedTodoIds: [] });
-    showRestorePrompt.value = false;
-    pendingAdjustTarget.value = ended;
-    showAdjustModal.value = true;
-    // 即便用户随后取消校正，原记录也已经正常结束，不会留下待处理会话
-    toast('原工作记录已结束，请确认这次工作的有效时长');
-  } catch (error) {
-    restoreError.value = `结束原工作记录失败：${error.message || '未知错误'}`;
-  } finally {
-    restoreBusy.value = false;
-  }
+  pendingAdjustTarget.value = activeSession.value;
+  showRestorePrompt.value = false;
+  showAdjustModal.value = true;
 }
 
 function adjustDurationCall(sessionId, seconds, options) {
+  if (pendingAdjustTarget.value && !pendingAdjustTarget.value.endedAt) {
+    return endAndAdjustSession(seconds, options);
+  }
   return workbench.sessions.adjustDuration(sessionId, seconds, options);
 }
 
 function onRestoredSessionAdjusted() {
   toast('工作时长已按你的确认校正');
+  window.dispatchEvent(new Event('workbench:session-duration-adjusted'));
+}
+
+function closeRestoredAdjustment() {
+  const wasActive = pendingAdjustTarget.value && !pendingAdjustTarget.value.endedAt;
+  showAdjustModal.value = false;
+  pendingAdjustTarget.value = null;
+  if (wasActive && activeSession.value) showRestorePrompt.value = true;
 }
 
 onMounted(async () => {
@@ -283,15 +287,18 @@ onMounted(async () => {
   // 发现跨次启动未结束的工作：必须让用户明确决定怎么处理，不静默计入离线时间
   if (needsRestoreDecision.value) showRestorePrompt.value = true;
 
-  removeCloseListener = workbench.sessions.onCloseRequest(() => {
+  removeCloseListener = workbench.sessions.onCloseRequest(async (request) => {
+    closeRequestId = request && request.requestId;
     if (decideCloseAction(activeSession.value) === 'confirm') {
       // 保留会话并退出时会直接放行，不需要用户再点一次
       shutdownError.value = '';
       showShutdown.value = true;
+      await nextTick();
+      workbench.sessions.respondClose('shown', closeRequestId);
       return;
     }
     // 没有正在进行的会话：正常关闭
-    workbench.sessions.respondClose('exit');
+    workbench.sessions.respondClose('exit', closeRequestId);
   });
 });
 

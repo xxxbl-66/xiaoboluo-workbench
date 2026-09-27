@@ -2,6 +2,7 @@
   <div class="quick-note-widget">
     <textarea
       v-model="quickContent"
+      @input="saver.markChanged()"
       class="quick-note-input"
       placeholder="随手记点什么…"
       spellcheck="false"
@@ -14,7 +15,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 import { createQuickNoteSaver, normalizeQuickNoteContent } from '../composables/quick-note.js';
@@ -22,7 +23,6 @@ import { createQuickNoteSaver, normalizeQuickNoteContent } from '../composables/
 const quickContent = ref('');
 const status = ref('idle');
 const errorMessage = ref('');
-let loaded = false;
 
 /**
  * 保存控制器负责全部"要不要保存"的判断：
@@ -60,15 +60,9 @@ async function loadQuickNote() {
   if (quickContent.value === '' && saver.revision === 0) {
     quickContent.value = loadedContent;
   }
-  // 载入赋值不产生"未保存变更"；用户真正输入过的内容也不会被覆盖
-  saver.clearTimer();
-  loaded = true;
+  // 载入赋值不触发输入事件；用户真正输入过的内容也不会被覆盖。
+  // 若读取期间已经输入，不得取消那次输入的防抖保存。
 }
-
-watch(quickContent, () => {
-  if (!loaded) return;
-  saver.markChanged();
-});
 
 async function retry() {
   const result = await saver.flush();

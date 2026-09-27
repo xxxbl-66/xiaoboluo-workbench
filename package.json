@@ -1,6 +1,6 @@
 {
   "name": "414-workbench",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "四一四工作台 - 本地离线个人工作台",
   "main": "electron/main.cjs",
   "author": "414-workbench",
@@ -27,7 +27,7 @@
     "appId": "com.xiaoboluo.workbench",
     "productName": "四一四工作台",
     "directories": {
-      "output": "dist-release/final-v0.1.2"
+      "output": "dist-release/v0.2.0"
     },
     "files": [
       "electron/**/*",

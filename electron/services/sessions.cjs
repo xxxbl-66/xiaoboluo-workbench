@@ -460,6 +460,38 @@ function adjustSessionDuration(store, sessionId, seconds, options = {}) {
   return next;
 }
 
+/** 一次写盘完成异常恢复的结束与时长校正；校验失败时保持原会话 active。 */
+function endAndAdjustSessionDuration(store, sessionId, seconds, options = {}) {
+  const checked = validateDurationSeconds(seconds);
+  if (!checked.ok) throw new Error(checked.error);
+
+  const items = readSessions(store);
+  const index = items.findIndex((item) => item.id === sessionId);
+  if (index === -1) throw new Error('工作记录不存在');
+  const session = items[index];
+  if (!isActive(session)) throw new Error('这次工作已经结束，无需重复结束');
+
+  const iso = new Date().toISOString();
+  const originalDuration = elapsedSeconds(session.startedAt, iso);
+  const reason = options.reason === undefined || options.reason === null
+    ? '' : String(options.reason).slice(0, 200);
+  const next = {
+    ...session,
+    endedAt: iso,
+    durationSeconds: checked.seconds,
+    originalDurationSeconds: originalDuration,
+    previousDurationSeconds: originalDuration,
+    durationAdjustmentCount: 1,
+    durationAdjustedAt: iso,
+    durationAdjustmentReason: reason,
+    durationAdjustedBy: 'user',
+    updatedAt: iso
+  };
+  items[index] = next;
+  writeSessions(store, items);
+  return next;
+}
+
 /** 会话是否发生过时长校正（老记录没有这些字段时为 false） */
 function wasDurationAdjusted(session) {
   if (!session) return false;
@@ -489,5 +521,6 @@ module.exports = {
   assertTodosInScope,
   validateDurationSeconds,
   adjustSessionDuration,
+  endAndAdjustSessionDuration,
   wasDurationAdjusted
 };

@@ -62,7 +62,7 @@ export async function adjustSessionDuration(session, secondsOrMinutes, options) 
   if (!session || !session.id) {
     return { ok: false, error: '缺少要校正的工作记录' };
   }
-  if (session.endedAt === null || session.endedAt === undefined || session.endedAt === '') {
+  if (!options.allowActive && (session.endedAt === null || session.endedAt === undefined || session.endedAt === '')) {
     return { ok: false, error: '这次工作还没有结束，请先结束再校正时长' };
   }
   const unit = options.unit || 'seconds';

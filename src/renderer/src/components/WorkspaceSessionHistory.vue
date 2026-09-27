@@ -154,6 +154,7 @@ function adjustCall(sessionId, seconds, options) {
 
 async function onAdjusted() {
   toast('工作时长已按你的确认校正');
+  window.dispatchEvent(new Event('workbench:session-duration-adjusted'));
   await load(limit.value);
   emit('adjusted');
 }

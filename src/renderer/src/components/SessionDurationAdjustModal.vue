@@ -1,8 +1,10 @@
 <template>
-  <Modal :model-value="modelValue" title="校正有效工作时长" width="520px" @close="$emit('close')">
+  <Modal :model-value="modelValue" :title="finishActive ? '结束并校正工作时长' : '校正有效工作时长'" width="520px" @close="requestClose">
     <div class="duration-adjust">
       <p class="duration-adjust__hint">
-        只校正这次工作的有效时长，开始时间、结束时间、归属工作空间和完成事项都不会被改动。
+        {{ finishActive
+          ? '填写有效工作时长后，工作会话才会结束并保存。取消时原会话仍在进行中。'
+          : '只校正这次工作的有效时长，开始时间、结束时间、归属工作空间和完成事项都不会被改动。' }}
       </p>
 
       <div v-if="session" class="duration-adjust__meta">
@@ -15,7 +17,7 @@
           <strong>{{ formatDateTime(session.startedAt) }}</strong>
         </div>
         <div>
-          <span>记录的墙上时长</span>
+          <span>{{ finishActive ? '当前经过时间' : '记录的墙上时长' }}</span>
           <strong>{{ formatDuration(wallSeconds) }}</strong>
         </div>
         <div>
@@ -52,9 +54,9 @@
     </div>
 
     <template #footer>
-      <button class="ghost" type="button" :disabled="busy" @click="$emit('close')">取消</button>
+      <button class="ghost" type="button" :disabled="busy" @click="requestClose">取消</button>
       <button class="primary" type="button" :disabled="busy || !canSubmit" @click="submit">
-        {{ busy ? '正在保存…' : '保存校正结果' }}
+        {{ busy ? '正在保存…' : (finishActive ? '结束并保存' : '保存校正结果') }}
       </button>
     </template>
   </Modal>
@@ -72,10 +74,15 @@ const props = defineProps({
   session: { type: Object, default: null },
   workspaceName: { type: String, default: '' },
   /** 主进程校正函数：(sessionId, seconds, options) => Promise */
-  adjust: { type: Function, required: true }
+  adjust: { type: Function, required: true },
+  finishActive: { type: Boolean, default: false }
 });
 
 const emit = defineEmits(['close', 'adjusted']);
+
+function requestClose() {
+  if (!busy.value) emit('close');
+}
 
 const presets = [30, 60, 90, 120, 180];
 
@@ -116,7 +123,7 @@ watch(
   (open) => {
     if (!open) return;
     // 默认填当前记录的有效时长，用户在此基础上修正
-    minutesInput.value = String(Math.round(currentSeconds.value / 60));
+    minutesInput.value = props.finishActive ? '' : String(Math.round(currentSeconds.value / 60));
     reason.value = '';
     errorMessage.value = '';
     busy.value = false;
@@ -131,6 +138,7 @@ async function submit() {
   try {
     const result = await adjustSessionDuration(props.session, minutesInput.value, {
       unit: 'minutes',
+      allowActive: props.finishActive,
       reason: reason.value.trim(),
       adjust: props.adjust
     });

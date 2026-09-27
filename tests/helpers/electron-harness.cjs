@@ -28,6 +28,7 @@ function createElectronMock(workRoot) {
   const handlers = new Map();
   const ipcOn = new Map();
   const sentToRenderer = [];
+  const windows = [];
   const documents = path.join(workRoot, 'documents');
   fs.mkdirSync(documents, { recursive: true });
 
@@ -49,16 +50,20 @@ function createElectronMock(workRoot) {
     },
     BrowserWindow: class {
       constructor() {
+        this.handlers = new Map();
+        this.destroyed = false;
+        this.closeCount = 0;
         this.webContents = {
           on: () => {},
           setWindowOpenHandler: () => {},
           send: (channel, payload) => sentToRenderer.push({ channel, payload })
         };
+        windows.push(this);
       }
       loadURL() {}
       loadFile() {}
       isDestroyed() {
-        return false;
+        return this.destroyed;
       }
       isMinimized() {
         return false;
@@ -66,10 +71,23 @@ function createElectronMock(workRoot) {
       restore() {}
       show() {}
       focus() {}
-      close() {}
-      on() {}
+      close() {
+        this.closeCount += 1;
+        let prevented = false;
+        const event = { preventDefault: () => { prevented = true; } };
+        for (const handler of this.handlers.get('close') || []) handler(event);
+        if (!prevented) {
+          this.destroyed = true;
+          for (const handler of this.handlers.get('closed') || []) handler();
+        }
+        return !prevented;
+      }
+      on(name, handler) {
+        if (!this.handlers.has(name)) this.handlers.set(name, []);
+        this.handlers.get(name).push(handler);
+      }
       static getAllWindows() {
-        return [];
+        return windows.filter((window) => !window.destroyed);
       }
     },
     Notification: class {
@@ -92,6 +110,7 @@ function createElectronMock(workRoot) {
     __handlers: handlers,
     __ipcOn: ipcOn,
     __sentToRenderer: sentToRenderer,
+    __windows: windows,
     __documents: documents
   };
 }

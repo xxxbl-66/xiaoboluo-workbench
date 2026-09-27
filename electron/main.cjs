@@ -1431,6 +1431,12 @@ function registerIpc() {
     return sessionService.adjustSessionDuration(store, sessionId, seconds, options || {});
   });
 
+  safeHandle('sessions:end-and-adjust', (sessionId, seconds, options) => {
+    const session = sessionService.findSession(store, sessionId);
+    if (!session) throw new Error('工作记录不存在');
+    return sessionService.endAndAdjustSessionDuration(store, sessionId, seconds, options || {});
+  });
+
   /** 异常重启后用户选择"继续这段工作"：只留审计痕迹，不新建会话 */
   safeHandle('sessions:resume', (sessionId) => {
     const session = sessionService.findSession(store, sessionId);
@@ -1707,6 +1713,8 @@ let forceQuit = false;
 let closeDecisionPending = false;
 let closeDecisionTimer = null;
 let pendingCloseResolve = null;
+let pendingCloseRequestId = null;
+let closeRequestSequence = 0;
 
 function resolveCloseDecision(action) {
   if (closeDecisionTimer) {
@@ -1715,25 +1723,34 @@ function resolveCloseDecision(action) {
   }
   const resolve = pendingCloseResolve;
   pendingCloseResolve = null;
+  pendingCloseRequestId = null;
   closeDecisionPending = false;
   if (resolve) resolve(action || 'exit');
 }
 
 /** 渲染层在确认界面里做出的选择 */
 function handleCloseResponse(payload) {
-  const action = payload && typeof payload.action === 'string' ? payload.action : 'exit';
-  resolveCloseDecision(action);
+  if (!closeDecisionPending || !payload || payload.requestId !== pendingCloseRequestId) return;
+  if (payload.action === 'shown') {
+    // 渲染层已显示确认框。用户作决定或保存期间不能使用无响应超时。
+    if (closeDecisionTimer) clearTimeout(closeDecisionTimer);
+    closeDecisionTimer = null;
+    return;
+  }
+  if (payload.action !== 'exit' && payload.action !== 'cancel') return;
+  resolveCloseDecision(payload.action);
 }
 
 /**
  * @returns {Promise<'exit'|'cancel'>} exit = 允许窗口关闭；cancel = 保持窗口
  */
 function askRendererAboutActiveSession() {
-  if (closeDecisionPending) return Promise.resolve('exit');
   const target = mainWindow;
   if (!target || target.isDestroyed()) return Promise.resolve('exit');
 
   closeDecisionPending = true;
+  pendingCloseRequestId = `${Date.now()}-${++closeRequestSequence}`;
+  const requestId = pendingCloseRequestId;
   return new Promise((resolve) => {
     pendingCloseResolve = resolve;
     closeDecisionTimer = setTimeout(() => {
@@ -1743,7 +1760,7 @@ function askRendererAboutActiveSession() {
     }, CLOSE_DECISION_TIMEOUT_MS);
     if (typeof closeDecisionTimer.unref === 'function') closeDecisionTimer.unref();
     try {
-      target.webContents.send('sessions:close-request');
+      target.webContents.send('sessions:close-request', { requestId });
     } catch (error) {
       console.error('[close] 无法通知渲染层关闭确认：', error && error.message);
       resolveCloseDecision('exit');
@@ -1757,6 +1774,10 @@ function askRendererAboutActiveSession() {
  */
 function handleWindowClose(event) {
   if (forceQuit) return false;
+  if (closeDecisionPending) {
+    event.preventDefault();
+    return true;
+  }
 
   let session = null;
   try {
@@ -1778,6 +1799,7 @@ function handleWindowClose(event) {
 }
 
 function createWindow() {
+  forceQuit = false;
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,

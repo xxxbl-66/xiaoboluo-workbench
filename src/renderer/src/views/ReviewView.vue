@@ -46,11 +46,11 @@
       </article>
       <article class="metric-card">
         <span>阅读时长</span>
-        <strong><input v-model.number="record.readingMinutes" type="number" min="0" @change="saveMetrics" /> 分钟</strong>
+        <strong><input v-model.number="record.readingMinutes" type="number" min="0" @input="saveController.markChanged()" @change="saveMetrics" /> 分钟</strong>
       </article>
       <article class="metric-card">
         <span>专注时长</span>
-        <strong><input v-model.number="record.focusMinutes" type="number" min="0" @change="saveMetrics" /> 分钟</strong>
+        <strong><input v-model.number="record.focusMinutes" type="number" min="0" @input="saveController.markChanged()" @change="saveMetrics" /> 分钟</strong>
       </article>
     </section>
 
@@ -110,7 +110,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
-import { runSave } from '../composables/save-result.js';
+import { createReviewSaveController } from '../composables/review-save-controller.js';
 import { formatDuration } from '../utils/duration.js';
 
 const todos = ref([]);
@@ -125,6 +125,19 @@ const record = ref({
 const saving = ref(false);
 const saveError = ref('');
 let saveTimer = null;
+const saveController = createReviewSaveController({
+  getDraft: () => ({
+    readingMinutes: Number(record.value.readingMinutes) || 0,
+    focusMinutes: Number(record.value.focusMinutes) || 0,
+    answers: {
+      whatDid: record.value.answers.whatDid || '',
+      whatLearned: record.value.answers.whatLearned || '',
+      whatImprove: record.value.answers.whatImprove || ''
+    }
+  }),
+  write: (payload) => workbench.review.update(dateKey, payload),
+  applySaved: ensureRecord
+});
 
 const today = new Date();
 const todayLabel = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
@@ -200,6 +213,7 @@ async function loadData() {
 }
 
 function scheduleSave() {
+  saveController.markChanged();
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveReview, 500);
 }
@@ -207,9 +221,10 @@ function scheduleSave() {
 async function saveMetrics() {
   record.value.readingMinutes = Number(record.value.readingMinutes) || 0;
   record.value.focusMinutes = Number(record.value.focusMinutes) || 0;
+  saveController.markChanged();
   const outcome = await saveReview({ silent: true });
   if (!outcome.ok) toast(outcome.error, 'error');
-  else toast('阅读／专注时长已保存');
+  else if (outcome.current) toast('阅读／专注时长已保存');
 }
 
 /**
@@ -219,24 +234,12 @@ async function saveMetrics() {
  * 失败时【不修改 record】，用户已输入的内容留在页面上可以重试。
  */
 async function saveReview() {
-  const saving = await runSave(
-    () => workbench.review.update(dateKey, {
-      readingMinutes: Number(record.value.readingMinutes) || 0,
-      focusMinutes: Number(record.value.focusMinutes) || 0,
-      answers: {
-        whatDid: record.value.answers.whatDid || '',
-        whatLearned: record.value.answers.whatLearned || '',
-        whatImprove: record.value.answers.whatImprove || ''
-      }
-    }),
-    { fallback: '复盘保存失败' }
-  );
+  const saving = await saveController.save();
   if (!saving.ok) {
     saveError.value = saving.error;
     return saving;
   }
   saveError.value = '';
-  ensureRecord(saving.data);
   try {
     history.value = await workbench.review.list();
   } catch (_) {
@@ -254,16 +257,20 @@ async function saveToday() {
   saving.value = true;
   try {
     const outcome = await saveReview();
-    if (outcome.ok) toast('今日复盘已保存');
-    else toast(outcome.error, 'error');
+    if (!outcome.ok) toast(outcome.error, 'error');
+    else if (outcome.current) toast('今日复盘已保存');
   } finally {
     saving.value = false;
   }
 }
 
-onMounted(loadData);
+onMounted(() => {
+  loadData();
+  window.addEventListener('workbench:session-duration-adjusted', loadWorkSummary);
+});
 
 onBeforeUnmount(() => {
+  window.removeEventListener('workbench:session-duration-adjusted', loadWorkSummary);
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
