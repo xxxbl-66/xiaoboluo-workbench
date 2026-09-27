@@ -27,17 +27,15 @@
       有 {{ missingIds.length }} 个已绑定的工作流已被删除。{{ missingIds.includes(workspace.resumeWorkflowId) ? '默认工作流已失效，请编辑工作空间重新选择。' : '请编辑工作空间移除失效绑定。' }}
     </p>
     <p v-if="running" role="status">工作流正在按顺序执行…</p>
-    <button v-if="feedback && !showFeedback" class="ghost small" type="button" @click="showFeedback = true">查看上次运行结果</button>
-    <WorkflowRunResult v-if="feedback && showFeedback" :result="feedback.result" :error="feedback.error" :workflow-name="feedback.name" @close="showFeedback = false" />
   </section>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import LineIcon from './LineIcon.vue';
-import WorkflowRunResult from './WorkflowRunResult.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { workflowStepSummary } from './workspace-workflow-summary.js';
+import { useRecentWorkflowResult } from '../composables/useRecentWorkflowResult.js';
 
 const props = defineProps({
   workspace: { type: Object, required: true },
@@ -49,11 +47,8 @@ const props = defineProps({
 defineEmits(['changed']);
 
 const running = ref(null);
-const feedback = ref(null);
-const showFeedback = ref(false);
-let mounted = true;
-watch(() => props.workspace.id, () => { feedback.value = null; showFeedback.value = false; });
-onBeforeUnmount(() => { mounted = false; });
+const { enterWorkspace, beginRun, setResult } = useRecentWorkflowResult();
+watch(() => props.workspace.id, enterWorkspace, { immediate: true, flush: 'sync' });
 
 const ids = computed(() => (Array.isArray(props.workspace.workflowIds) ? props.workspace.workflowIds : []));
 /** 容错：忽略已经被删除的工作流 id */
@@ -70,19 +65,12 @@ async function run(workflow) {
   if (running.value || props.busy) return;
   const workspaceId = props.workspace.id;
   running.value = workflow.id;
-  feedback.value = null;
-  showFeedback.value = false;
+  const attempt = beginRun(workspaceId);
   try {
     const result = await workbench.workflows.runDetailed(workflow.id);
-    if (mounted && props.workspace.id === workspaceId) {
-      feedback.value = { name: workflow.name, result, error: '' };
-      showFeedback.value = true;
-    }
+    setResult(attempt, { name: workflow.name, result, error: '' });
   } catch (error) {
-    if (mounted && props.workspace.id === workspaceId) {
-      feedback.value = { name: workflow.name, result: null, error: error.message || '工作流执行失败' };
-      showFeedback.value = true;
-    }
+    setResult(attempt, { name: workflow.name, result: null, error: error.message || '工作流执行失败' });
   } finally {
     running.value = null;
   }

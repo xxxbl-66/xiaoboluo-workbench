@@ -8,8 +8,19 @@ async function loadComponent(relativePath, shallowWorkspace = false) {
   const esbuild = require('esbuild');
   const compiler = require('@vue/compiler-sfc');
   const entry = path.join(__dirname, '..', relativePath);
+  const manualWorkspace = relativePath.endsWith('/WorkspaceWorkflows.vue');
   const result = await esbuild.build({
-    entryPoints: [entry],
+    entryPoints: manualWorkspace ? undefined : [entry],
+    // Production's WorkspaceView owns the result panel. Exercise the real execution
+    // component together with that real shared panel instead of expecting local state.
+    stdin: manualWorkspace ? {
+      resolveDir: path.join(__dirname, '..'), sourcefile: 'workspace-workflows-host.js',
+      contents: `import { h } from 'vue';
+        import Workflows from './src/renderer/src/components/WorkspaceWorkflows.vue';
+        import RecentResult from './src/renderer/src/components/RecentWorkflowResult.vue';
+        export default { props: ['workspace', 'workflows', 'busy', 'archived'],
+          render() { return h('div', [h(Workflows, this.$props), h(RecentResult, { currentWorkspaceId: this.workspace.id })]); } };`
+    } : undefined,
     bundle: true,
     platform: 'node',
     format: 'cjs',
@@ -21,7 +32,7 @@ async function loadComponent(relativePath, shallowWorkspace = false) {
           if (filename.endsWith('WorkspaceCard.vue')) {
             return { contents: "import { h } from 'vue'; export default { props: ['workspace'], emits: ['open'], setup(props, { emit }) { return () => h('button', { onClick: () => emit('open', props.workspace) }, '打开工作空间 ' + props.workspace.id); } };", loader: 'js' };
           }
-          if (!filename.endsWith('ResumeWorkCard.vue') && !filename.endsWith('WorkflowRunResult.vue')) {
+          if (!filename.endsWith('ResumeWorkCard.vue') && !filename.endsWith('WorkflowRunResult.vue') && !filename.endsWith('RecentWorkflowResult.vue')) {
             return { contents: 'export default { render() { return null; } };', loader: 'js' };
           }
         }

@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue';
+import { useRecentWorkflowResult } from './useRecentWorkflowResult.js';
 
 /**
  * Workspace 的模块级轻量状态。
@@ -12,6 +13,7 @@ const activeWorkspaceId = ref(null);
 const pendingAction = ref(null);
 /** 最近一次 workspaces:list 的结果，供驾驶舱等页面共享，避免重复 IPC */
 const workspaceList = ref([]);
+const { enterWorkspace } = useRecentWorkflowResult();
 
 const activeWorkspace = computed(() => (
   workspaceList.value.find((item) => item.id === activeWorkspaceId.value) || null
@@ -19,6 +21,7 @@ const activeWorkspace = computed(() => (
 
 function selectWorkspace(id) {
   activeWorkspaceId.value = id ? String(id) : null;
+  enterWorkspace(activeWorkspaceId.value);
   if (pendingAction.value?.workspaceId !== activeWorkspaceId.value) pendingAction.value = null;
 }
 
@@ -30,7 +33,7 @@ function clearWorkspace() {
 function requestWorkspaceAction(workspaceId, action) {
   const id = workspaceId ? String(workspaceId) : null;
   if (!id || !['resume', 'end'].includes(action)) return;
-  activeWorkspaceId.value = id;
+  selectWorkspace(id);
   pendingAction.value = { workspaceId: id, action };
 }
 

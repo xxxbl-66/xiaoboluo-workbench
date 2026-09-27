@@ -94,9 +94,8 @@
       />
       <div v-if="resumeWorkspaceId === current.id" class="ws-resume-feedback">
         <p v-if="resumeNotice" role="status">{{ resumeNotice }}</p>
-        <button v-if="resumeFeedback && !showResumeFeedback" class="ghost small" type="button" @click="showResumeFeedback = true">查看上次运行结果</button>
-        <WorkflowRunResult v-if="resumeFeedback && showResumeFeedback" :result="resumeFeedback.result" :error="resumeFeedback.error" :workflow-name="resumeFeedback.name" @close="showResumeFeedback = false" />
       </div>
+      <RecentWorkflowResult :current-workspace-id="current.id" />
 
       <section class="ws-overview panel" aria-label="工作空间概览">
         <div class="ws-overview__stats">
@@ -189,12 +188,13 @@ import WorkspaceResources from '../components/WorkspaceResources.vue';
 import WorkSessionPanel from '../components/WorkSessionPanel.vue';
 import ResumeWorkCard from '../components/ResumeWorkCard.vue';
 import WorkspaceWorkflows from '../components/WorkspaceWorkflows.vue';
-import WorkflowRunResult from '../components/WorkflowRunResult.vue';
+import RecentWorkflowResult from '../components/RecentWorkflowResult.vue';
 import WorkspaceSessionHistory from '../components/WorkspaceSessionHistory.vue';
 import EndSessionModal from '../components/EndSessionModal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { useWorkspace } from '../composables/useWorkspace.js';
 import { useWorkSession } from '../composables/useWorkSession.js';
+import { useRecentWorkflowResult } from '../composables/useRecentWorkflowResult.js';
 import { toast } from '../composables/toast.js';
 import { formatDuration, formatRelative } from '../utils/duration.js';
 import { createWorkflowListLoader, resumeWorkspaceWorkflow } from '../utils/workflow-resume.mjs';
@@ -206,6 +206,7 @@ defineProps({
 
 const { activeWorkspaceId, workspaceList, selectWorkspace, clearWorkspace, setWorkspaceList, ensureSelectionValid, takeWorkspaceAction } = useWorkspace();
 const { activeSession, startSession, endSession, workflowOpening, beginWorkflowOpening, finishWorkflowOpening } = useWorkSession();
+const { captureWorkspace, beginRun, setResult } = useRecentWorkflowResult();
 
 const loading = ref(true);
 const listError = ref('');
@@ -215,8 +216,6 @@ const editing = ref(null);
 const workflows = ref([]);
 const starting = ref(false);
 const resuming = ref(false);
-const resumeFeedback = ref(null);
-const showResumeFeedback = ref(false);
 const resumeNotice = ref('');
 const resumeWorkspaceId = ref(null);
 let mounted = true;
@@ -505,13 +504,13 @@ async function resumeLastWork() {
   if (!current.value || current.value.archived === true || resuming.value || starting.value) return;
   const workspace = current.value;
   const workspaceId = workspace.id;
+  const resultContext = captureWorkspace(workspaceId);
   const attempt = { generation: ++resumeGeneration, workspaceId };
   activeResumeAttempt = attempt;
   resuming.value = true;
   resumeWorkspaceId.value = workspaceId;
-  resumeFeedback.value = null;
-  showResumeFeedback.value = false;
   resumeNotice.value = '';
+  let resultAttempt = null;
   try {
     const result = await resumeWorkspaceWorkflow({
       workspace,
@@ -519,17 +518,20 @@ async function resumeLastWork() {
       isCurrent: () => isCurrentResumeAttempt(attempt),
       startSession,
       runDetailed: workbench.workflows.runDetailed,
-      onBeforeWorkflow: (session) => beginWorkflowOpening(session.id),
+      onBeforeWorkflow: (session) => {
+        beginWorkflowOpening(session.id);
+        resultAttempt = beginRun(workspaceId, resultContext);
+      },
       onAfterWorkflow: (session) => finishWorkflowOpening(session.id),
       onStarted: async () => {
         if (isCurrentResumeAttempt(attempt)) resumeNotice.value = '工作已开始，正在计时；正在打开工作环境…';
         if (mounted) await loadWorkspaces();
       }
     });
+    // 已发起的运行可在 Dashboard 导航期间完成；共享 scope/token 决定是否仍有效。
+    if (result.feedback) setResult(resultAttempt, result.feedback);
     if (isCurrentResumeAttempt(attempt)) {
       resumeNotice.value = result.notice;
-      resumeFeedback.value = result.feedback;
-      showResumeFeedback.value = Boolean(result.feedback);
     }
   } catch (error) {
     if (isCurrentResumeAttempt(attempt)) resumeNotice.value = `开始工作失败：${error.message || '未知错误'}`;
@@ -547,8 +549,6 @@ watch(activeWorkspaceId, () => {
   lastSessionLoading.value = true;
   lastSessionError.value = '';
   invalidateResumeAttempt();
-  resumeFeedback.value = null;
-  showResumeFeedback.value = false;
   resumeNotice.value = '';
   resumeWorkspaceId.value = null;
 }, { flush: 'sync' });
