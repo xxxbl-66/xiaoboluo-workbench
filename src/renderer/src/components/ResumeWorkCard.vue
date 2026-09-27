@@ -2,17 +2,15 @@
   <section v-if="session" class="resume-card panel">
     <header class="resume-card__head">
       <div>
-        <p class="resume-card__kicker">上次做到哪里</p>
-        <h2>
-          {{ formatRelative(session.startedAt) }}
-          <span class="resume-card__duration">{{ formatDuration(session.durationSeconds) }}</span>
-        </h2>
+        <p class="resume-card__kicker">接着上次继续</p>
+        <h2>上次工作 <span class="resume-card__duration">{{ formatRelative(session.startedAt) }} · {{ formatDuration(session.durationSeconds) }}</span></h2>
       </div>
-      <button v-if="!archived" class="primary" type="button" :disabled="busy" @click="$emit('resume')">
-        <LineIcon name="play" :size="15" />
-        {{ busy ? '正在恢复…' : '继续上次工作' }}
-      </button>
     </header>
+
+    <div class="resume-card__next">
+      <span class="resume-card__label">下一步</span>
+      <strong>{{ session.nextStep || '上次未填写下一步，可从剩余任务里选择。' }}</strong>
+    </div>
 
     <div class="resume-card__grid">
       <div class="resume-card__block">
@@ -43,19 +41,13 @@
         <span class="resume-card__label">上次备注</span>
         <p>{{ session.note || '（没有填写）' }}</p>
       </div>
-      <div>
-        <span class="resume-card__label">下一步</span>
-        <p :class="{ 'resume-card__next--empty': !session.nextStep }">
-          {{ session.nextStep || '（没有填写）' }}
-        </p>
-      </div>
     </div>
   </section>
 
   <section v-else class="resume-card resume-card--empty panel">
     <p class="resume-card__kicker">上次做到哪里</p>
     <p v-if="archived">这个工作空间还没有工作记录。恢复后可以开始新的工作。</p>
-    <p v-else>这个工作空间还没有工作记录。点击「开始工作」记录第一次，之后就能一键接着继续。</p>
+    <p v-else>这个工作空间还没有工作记录。点击页面顶部的「开始工作」，结束时留下下一步，就能从这里接着继续。</p>
   </section>
 </template>
 
@@ -63,6 +55,7 @@
 import { computed } from 'vue';
 import LineIcon from './LineIcon.vue';
 import { formatDuration, formatRelative } from '../utils/duration.js';
+import { completedTodosOf } from './completed-todos.js';
 
 const props = defineProps({
   session: { type: Object, default: null },
@@ -72,11 +65,7 @@ const props = defineProps({
 
 defineEmits(['resume']);
 
-const completed = computed(() => (
-  props.session && Array.isArray(props.session.completedTodoSnapshots)
-    ? props.session.completedTodoSnapshots
-    : props.session && Array.isArray(props.session.completedTodos) ? props.session.completedTodos : []
-));
+const completed = computed(() => completedTodosOf(props.session));
 const remaining = computed(() => (
   props.session && Array.isArray(props.session.remainingTodos) ? props.session.remainingTodos : []
 ));
@@ -133,6 +122,8 @@ const remaining = computed(() => (
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px;
 }
+.resume-card__next { padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: var(--radius-sm); background: var(--primary-soft); }
+.resume-card__next strong { display: block; font-size: 15px; font-weight: 650; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .resume-card__block {
   min-width: 0;

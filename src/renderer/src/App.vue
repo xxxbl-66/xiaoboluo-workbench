@@ -35,6 +35,7 @@
       :workspace-name="activeSessionName"
       :elapsed-seconds="elapsedSeconds"
       :busy="shutdownBusy"
+      :workflow-opening="workflowOpening"
       :error-message="shutdownError"
       @back="returnToWork"
       @end="endWorkAndClose"
@@ -84,6 +85,7 @@ import BookmarksView from './views/BookmarksView.vue';
 import BookshelfView from './views/BookshelfView.vue';
 import ChatView from './views/ChatView.vue';
 import SettingsView from './views/SettingsView.vue';
+import WorkflowView from './views/WorkflowView.vue';
 import { workbench } from './composables/useWorkbench.js';
 import { useWorkSession } from './composables/useWorkSession.js';
 import { toast } from './composables/toast.js';
@@ -95,6 +97,7 @@ const sidebarExpanded = ref(false);
 const {
   activeSession,
   elapsedSeconds,
+  workflowOpening,
   needsRestoreDecision,
   restorePromptDismissed,
   initialize: initializeSession,
@@ -128,6 +131,7 @@ let removeCloseListener = null;
 const viewMap = {
   dashboard: DashboardView,
   workspace: WorkspaceView,
+  workflow: WorkflowView,
   files: FilesView,
   todos: TodosView,
   calendar: CalendarView,
@@ -197,6 +201,10 @@ function keepSessionAndClose() {
 /** 结束工作：先进入现有结束 Session 流程，保存成功后才允许关闭 */
 async function endWorkAndClose() {
   if (shutdownBusy.value) return;
+  if (workflowOpening.value) {
+    shutdownError.value = '正在恢复工作环境，请等待工作流结束后再结束工作。';
+    return;
+  }
   shutdownBusy.value = true;
   shutdownError.value = '';
   try {

@@ -26,7 +26,7 @@ export function createWorkflowListLoader(fetchWorkflows, onLoaded) {
 }
 
 /** 有默认工作流时先确认列表可用，再建立 Session；执行失败只改变本次反馈。 */
-export async function resumeWorkspaceWorkflow({ workspace, workflows = [], loadWorkflows, isCurrent, startSession, onStarted, runDetailed }) {
+export async function resumeWorkspaceWorkflow({ workspace, workflows = [], loadWorkflows, isCurrent, startSession, onStarted, runDetailed, onBeforeWorkflow, onAfterWorkflow }) {
   const resumeId = workspace.resumeWorkflowId;
   const availableWorkflows = resumeId && loadWorkflows ? await loadWorkflows() : workflows;
   const boundIds = Array.isArray(workspace.workflowIds) ? workspace.workflowIds : [];
@@ -42,19 +42,23 @@ export async function resumeWorkspaceWorkflow({ workspace, workflows = [], loadW
     return { started: false, notice: '已有正在进行的工作，请先结束或返回那一项。', feedback: null };
   }
   if (!started?.session?.id) throw new Error('无法确认工作会话已创建');
-  try { await onStarted?.(); } catch (_) { /* 刷新摘要失败不回滚 Session */ }
-
-  if (!resumeId) {
-    return { started: true, notice: '工作已开始，正在计时；未设置默认工作流，不会自动打开工作环境。', feedback: null };
-  }
+  if (resumeId) onBeforeWorkflow?.(started.session);
   try {
-    const result = await runDetailed(resumeId);
-    return { started: true, notice: '工作已开始，正在计时。', feedback: { name: workflow.name, result, error: '' } };
-  } catch (error) {
-    return {
-      started: true,
-      notice: '工作已开始，正在计时；默认工作流执行失败。',
-      feedback: { name: workflow.name, result: null, error: error?.message || '执行失败' }
-    };
+    try { await onStarted?.(); } catch (_) { /* 刷新摘要失败不回滚 Session */ }
+    if (!resumeId) {
+      return { started: true, notice: '工作已开始，正在计时；未设置默认工作流，不会自动打开工作环境。', feedback: null };
+    }
+    try {
+      const result = await runDetailed(resumeId);
+      return { started: true, notice: '工作已开始，正在计时。', feedback: { name: workflow.name, result, error: '' } };
+    } catch (error) {
+      return {
+        started: true,
+        notice: '工作已开始，正在计时；默认工作流执行失败。',
+        feedback: { name: workflow.name, result: null, error: error?.message || '执行失败' }
+      };
+    }
+  } finally {
+    if (resumeId) onAfterWorkflow?.(started.session);
   }
 }

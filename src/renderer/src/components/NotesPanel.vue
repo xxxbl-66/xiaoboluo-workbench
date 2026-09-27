@@ -3,7 +3,7 @@
     <div class="panel-head">
       <div>
         <h2>便签笔记</h2>
-        <p>Markdown 快速记事，内容保存在本地 JSON。</p>
+        <p>快速记录，离线保存在本机；支持 Markdown 编辑与预览。</p>
       </div>
       <button class="primary" type="button" @click="createNote">新建便签</button>
     </div>
@@ -30,8 +30,10 @@
           <button :class="{ active: mode === 'edit' }" type="button" @click="mode = 'edit'">编辑</button>
           <button :class="{ active: mode === 'preview' }" type="button" @click="mode = 'preview'">预览</button>
           <span class="note-spacer"></span>
+          <span class="note-save-state" :class="{ error: saveState === 'error' }" role="status">{{ saveState === 'saving' ? '保存中…' : saveState === 'error' ? '尚未保存' : saveState === 'dirty' ? '有未保存修改' : '已保存' }}</span>
           <button class="icon-button danger" type="button" @click="removeSelected">🗑</button>
         </div>
+        <p v-if="saveError" class="form-error" role="alert">{{ saveError }}。内容仍保留在编辑器中。</p>
         <textarea v-if="mode === 'edit'" v-model="selected.content" class="note-content" placeholder="支持 Markdown：标题、列表、粗体、代码块…" @input="scheduleSave"></textarea>
         <MarkdownRenderer v-else class="note-preview" :content="selected.content" />
       </div>
@@ -52,6 +54,8 @@ const notes = ref([]);
 const selectedId = ref(null);
 const selected = ref(null);
 const mode = ref('edit');
+const saveState = ref('saved');
+const saveError = ref('');
 let saveTimer = null;
 
 async function loadNotes() {
@@ -77,6 +81,8 @@ async function selectNote(note) {
   selectedId.value = note.id;
   selected.value = notes.value.find((item) => item.id === note.id) || note;
   mode.value = 'edit';
+  saveState.value = 'saved';
+  saveError.value = '';
 }
 
 async function createNote() {
@@ -90,18 +96,24 @@ async function createNote() {
 }
 
 function scheduleSave() {
+  saveState.value = 'dirty';
+  saveError.value = '';
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveSelected, 500);
 }
 
 async function saveSelected() {
   if (!selected.value) return;
+  saveState.value = 'saving';
+  saveError.value = '';
   try {
     const note = await saveNoteRecord(workbench.files.notes, selected.value.id, selected.value);
     const index = notes.value.findIndex((item) => item.id === note.id);
     if (index !== -1) notes.value[index] = note;
+    saveState.value = 'saved';
   } catch (error) {
-    toast(error.message, 'error');
+    saveState.value = 'error';
+    saveError.value = error.message || '便签保存失败';
   }
 }
 
@@ -124,3 +136,8 @@ onBeforeUnmount(() => {
   flushPendingSave();
 });
 </script>
+
+<style scoped>
+.note-save-state { margin-right: 8px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.note-save-state.error { color: var(--danger); }
+</style>

@@ -7,6 +7,36 @@ const esbuild = require('esbuild');
 const fs = require('node:fs');
 const { createHost } = require('./helpers/vue-host.cjs');
 
+test('Resume 与 History 忽略损坏快照，保留有效标题和旧格式回退', async () => {
+  const originalWindow = global.window;
+  global.window = { workbench: { sessions: { history: async () => [] } } };
+  const { createRenderer, h, nextTick } = await import('vue');
+  const resume = await loadComponent('ResumeWorkCard.vue');
+  const history = await loadComponent('WorkspaceSessionHistory.vue');
+  const base = { id: 's1', startedAt: '2026-09-26T10:00:00.000Z', endedAt: '2026-09-26T10:10:00.000Z', durationSeconds: 600 };
+  try {
+    for (const snapshots of [
+      [{ id: 't1', title: '保留的任务' }, null],
+      [null, { id: 't1', title: '保留的任务' }],
+      [false, { id: 42, title: '坏项' }, { id: 't1', title: '保留的任务' }],
+      [null, false, { title: '坏项' }]
+    ]) {
+      const session = { ...base, completedTodoSnapshots: snapshots, completedTodos: [{ id: 'old', title: '旧格式任务' }] };
+      global.window.workbench.sessions.history = async () => [session];
+      const expected = snapshots.some((item) => item?.id === 't1') ? '保留的任务' : '旧格式任务';
+      const host = createHost(createRenderer);
+      const app = host.renderer.createApp({ render: () => h('div', [h(resume, { session }), h(history, { workspaceId: 'w1' })]) });
+      try {
+        app.mount(host.root);
+        await new Promise(setImmediate); await nextTick();
+        assert.match(host.content(host.root), new RegExp(expected));
+        assert.equal(host.content(host.root).split(expected).length - 1, 2);
+        assert.doesNotMatch(host.content(host.root), /坏项/);
+      } finally { app.unmount(); }
+    }
+  } finally { global.window = originalWindow; }
+});
+
 async function loadComponent(name, options = {}) {
   const filename = path.join(__dirname, '..', 'src/renderer/src', name === 'WorkspaceView.vue' ? 'views' : 'components', name);
   const result = await esbuild.build({
@@ -197,6 +227,47 @@ test('WorkspaceResources keeps edited Note input after a failed save', async () 
     assert.match(host.content(host.body), /编辑便签/);
     app.unmount();
   } finally { global.window = originalWindow; global.Document = originalDocument; global.ShadowRoot = originalShadowRoot; }
+});
+
+test('WorkspaceResources Note update returns null: draft stays open and no success appears', async () => {
+  const oldWindow = global.window;
+  const oldDocument = global.Document;
+  const oldShadowRoot = global.ShadowRoot;
+  const oldCalls = global.__testToastCalls;
+  const calls = [];
+  global.__testToastCalls = calls;
+  global.Document = class {}; global.ShadowRoot = class {};
+  global.window = { workbench: {
+    todos: { list: async () => [] }, goals: { list: async () => [] },
+    files: { favorites: { list: async () => [] }, notes: {
+      list: async () => [{ id: 'n', title: '旧便签', content: '旧内容', workspaceId: 'w' }],
+      update: async () => null
+    } },
+    bookmarks: { list: async () => [] }, apps: { list: async () => [] },
+    system: { pathExistsBatch: async () => ({}) }
+  } };
+  const { createRenderer, nextTick } = await import('vue');
+  try {
+    const host = createHost(createRenderer);
+    const app = host.renderer.createApp(await loadComponent('WorkspaceResources.vue', { captureToast: true }), { workspaceId: 'w' });
+    app.mount(host.root);
+    await new Promise(setImmediate); await nextTick();
+    host.click(host.find('button', '便签'));
+    await new Promise(setImmediate); await nextTick();
+    host.click(host.find('button', '打开')); await nextTick();
+    host.click(host.find('button', '编辑')); await nextTick();
+    host.input(host.find('textarea'), '不能丢的改动'); await nextTick();
+    host.click(host.find('button', '保存'));
+    await new Promise(setImmediate); await nextTick();
+    assert.equal(host.find('textarea').value, '不能丢的改动');
+    assert.match(host.content(host.body), /编辑便签/);
+    assert.match(host.content(host.body), /已不存在.*尚未保存/);
+    assert.equal(calls.some((item) => item.message.includes('已保存')), false);
+    app.unmount();
+  } finally {
+    global.window = oldWindow; global.Document = oldDocument; global.ShadowRoot = oldShadowRoot;
+    global.__testToastCalls = oldCalls;
+  }
 });
 
 test('WorkspaceResources drops late A and old tab responses after switching to B Notes', async () => {

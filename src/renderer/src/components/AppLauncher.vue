@@ -8,7 +8,7 @@
       <div class="panel-actions">
         <button class="ghost" type="button" @click="scanFolder">选择文件夹</button>
         <button class="ghost" type="button" @click="scanDesktop">扫描桌面</button>
-        <button class="primary" type="button" @click="openAddApp">添加应用</button>
+        <button class="ghost" type="button" @click="openAddApp">添加应用</button>
       </div>
     </div>
 

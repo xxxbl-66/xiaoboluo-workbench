@@ -2,7 +2,7 @@
   <div class="view bookmarks-view">
     <div class="bookmark-module">
       <p class="bookmark-module__path">WORKSPACE / BOOKMARKS</p>
-      <h2 class="bookmark-module__title">我的收藏夹</h2>
+      <h1 class="bookmark-module__title">我的收藏夹</h1>
       <p class="bookmark-module__desc">文章、推文、视频和灵感，统一收纳在一个地方。</p>
 
       <form class="bookmark-module__composer" @submit.prevent="openCreateFromComposer">
@@ -18,7 +18,7 @@
 
       <div class="bookmark-module__meta">
         <div class="bookmark-module__stack">
-          <span>CURRENT STACK</span>
+          <span>当前收藏</span>
           <strong>{{ filteredItems.length }} / {{ items.length }}</strong>
         </div>
         <div class="bookmark-module__filters">
@@ -36,7 +36,9 @@
       </div>
 
       <div class="bookmark-module__card">
-        <div v-if="filteredItems.length" class="bookmark-module__list">
+        <div v-if="loading" class="empty-state small" role="status">正在加载收藏…</div>
+        <div v-else-if="loadError" class="state-error" role="alert">{{ loadError }} <button class="ghost small" type="button" @click="loadItems">重试</button></div>
+        <div v-else-if="filteredItems.length" class="bookmark-module__list">
           <article v-for="item in filteredItems" :key="item.id" class="bookmark-module__item" @dblclick="openBookmark(item)">
             <span class="bookmark-module__type-icon">
               <LineIcon :name="typeIcon(item.type)" :size="18" />
@@ -52,24 +54,22 @@
             </div>
 
             <div class="bookmark-module__actions">
-              <button class="bookmark-module__icon" type="button" title="打开" @click.stop="openBookmark(item)">
+              <button class="bookmark-module__icon" type="button" :aria-label="`打开收藏：${item.title}`" @click.stop="openBookmark(item)">
                 <LineIcon name="external" :size="16" />
               </button>
-              <button class="bookmark-module__icon" type="button" title="编辑" @click.stop="openEdit(item)">
+              <button class="bookmark-module__icon" type="button" :aria-label="`编辑收藏：${item.title}`" @click.stop="openEdit(item)">
                 <LineIcon name="edit" :size="16" />
               </button>
-              <button class="bookmark-module__icon danger" type="button" title="删除" @click.stop="removeItem(item)">
+              <button class="bookmark-module__icon danger" type="button" :aria-label="`删除收藏：${item.title}`" @click.stop="removeItem(item)">
                 <LineIcon name="trash" :size="16" />
               </button>
             </div>
           </article>
         </div>
-        <div v-else class="bookmark-module__empty">暂无收藏</div>
+        <div v-else class="bookmark-module__empty">{{ items.length ? '这个分类还没有收藏。' : '还没有收藏，输入链接或标题开始添加。' }}</div>
 
-        <button class="bookmark-module__clear" type="button" @click="clearItems">清空收藏</button>
+        <button v-if="items.length" class="bookmark-module__clear" type="button" @click="clearItems">清空收藏</button>
       </div>
-
-      <p class="bookmark-module__end">END OF YOUR COLLECTION</p>
     </div>
 
     <Modal v-model="showModal" :title="editingItem ? '编辑收藏' : '添加收藏'" width="560px" @close="closeModal">
@@ -89,7 +89,8 @@
         </label>
         <label class="full">
           链接
-          <input v-model="form.url" placeholder="https://…（想法可留空）" />
+          <input v-model="form.url" type="url" placeholder="https://…（想法可留空）" @input="formError = ''" />
+          <small v-if="formError" class="form-error" role="alert">{{ formError }}</small>
         </label>
         <label class="full">
           备注
@@ -98,7 +99,7 @@
       </div>
       <template #footer>
         <button class="ghost" type="button" @click="closeModal">取消</button>
-        <button class="primary" type="button" @click="saveBookmark">保存</button>
+        <button class="primary" type="button" :disabled="saving" @click="saveBookmark">{{ saving ? '保存中…' : '保存' }}</button>
       </template>
     </Modal>
   </div>
@@ -110,6 +111,7 @@ import Modal from '../components/Modal.vue';
 import LineIcon from '../components/LineIcon.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
+import { bookmarkUrlError } from '../utils/bookmark-url.js';
 
 const items = ref([]);
 const filter = ref('all');
@@ -118,6 +120,10 @@ const editingItem = ref(null);
 const form = ref({ type: 'article', title: '', url: '', note: '' });
 const composerTitle = ref('');
 const composerType = ref('article');
+const loading = ref(true);
+const loadError = ref('');
+const formError = ref('');
+const saving = ref(false);
 
 const tabs = [
   { value: 'all', label: '全部' },
@@ -166,10 +172,15 @@ function normalizeUrl(value) {
 }
 
 async function loadItems() {
-  items.value = await workbench.bookmarks.list();
+  loading.value = true;
+  loadError.value = '';
+  try { items.value = await workbench.bookmarks.list(); }
+  catch (error) { loadError.value = `收藏加载失败：${error.message || '未知错误'}`; }
+  finally { loading.value = false; }
 }
 
 function openCreate() {
+  formError.value = '';
   editingItem.value = null;
   const raw = composerTitle.value.trim();
   const isUrl = isWebUrl(raw);
@@ -188,6 +199,7 @@ function openCreateFromComposer() {
 }
 
 function openEdit(item) {
+  formError.value = '';
   editingItem.value = item;
   form.value = { type: item.type, title: item.title, url: item.url || '', note: item.note || '' };
   showModal.value = true;
@@ -199,8 +211,13 @@ function closeModal() {
 }
 
 async function saveBookmark() {
+  if (saving.value) return;
+  formError.value = '';
+  saving.value = true;
   try {
     if (!form.value.title.trim() && form.value.type !== 'idea') throw new Error('请填写标题');
+    const invalidUrl = bookmarkUrlError(form.value.url);
+    if (invalidUrl) throw new Error(invalidUrl);
     const payload = { ...form.value };
     if (editingItem.value) {
       await workbench.bookmarks.update(editingItem.value.id, payload);
@@ -211,8 +228,8 @@ async function saveBookmark() {
     closeModal();
     toast('收藏已保存');
   } catch (error) {
-    toast(error.message, 'error');
-  }
+    formError.value = error.message || '收藏保存失败';
+  } finally { saving.value = false; }
 }
 
 async function openBookmark(item) {

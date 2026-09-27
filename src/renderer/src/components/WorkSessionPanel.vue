@@ -10,7 +10,10 @@
           <p class="session-panel__sub">开始于 {{ formatRelative(activeSession.startedAt) }}</p>
         </div>
       </div>
-      <button class="primary" type="button" @click="$emit('end')">结束工作</button>
+      <div class="session-panel__actions">
+        <small v-if="workflowOpening || busy">{{ workflowOpening ? '正在恢复工作环境…' : '正在开始工作…' }}</small>
+        <button class="ghost" type="button" :disabled="workflowOpening || busy" @click="$emit('end')">结束工作</button>
+      </div>
     </template>
 
     <!-- 别的 WorkSpace 正在工作 -->
@@ -27,7 +30,7 @@
       </div>
       <div class="panel-actions">
         <button class="ghost" type="button" @click="$emit('go-active')">返回该工作</button>
-        <button class="primary" type="button" @click="$emit('end')">结束该工作</button>
+        <button class="ghost" type="button" :disabled="workflowOpening || busy" @click="$emit('end')">结束该工作</button>
       </div>
     </template>
 
@@ -39,9 +42,7 @@
           <strong class="session-panel__idle">开始后会记录本次时长、完成事项和下一步</strong>
         </div>
       </div>
-      <button class="primary" type="button" :disabled="busy" @click="$emit('start')">
-        {{ busy ? '正在开始…' : '开始工作' }}
-      </button>
+      <span class="session-panel__sub">从页面顶部开始或继续工作</span>
     </template>
   </section>
 </template>
@@ -61,7 +62,7 @@ const props = defineProps({
 
 defineEmits(['start', 'end', 'go-active']);
 
-const { activeSession, elapsedSeconds, isWorking } = useWorkSession();
+const { activeSession, elapsedSeconds, isWorking, workflowOpening } = useWorkSession();
 
 const currentWorkspaceId = computed(() => {
   const value = activeSession.value ? activeSession.value.workspaceId : null;
@@ -146,4 +147,7 @@ const otherWorkspaceName = computed(() => props.activeWorkspaceName || '另一�
   font-size: 12px;
   color: var(--text-muted);
 }
+
+.session-panel__actions { display: flex; align-items: center; gap: 10px; }
+.session-panel__actions small { color: var(--text-muted); }
 </style>

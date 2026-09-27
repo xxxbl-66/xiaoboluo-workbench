@@ -17,9 +17,11 @@
     <div class="ws-resources__body">
       <div v-if="loading" class="empty-state small"><p>正在加载…</p></div>
 
+      <div v-else-if="loadError" class="state-error" role="alert">资源加载失败：{{ loadError }} <button class="ghost small" type="button" @click="load">重试</button></div>
+
       <template v-else>
         <div v-if="!filteredRows.length" class="empty-state small">
-          <p>{{ rows.length ? '没有匹配的资源，请试试其他关键词。' : emptyText }}</p>
+          <p>{{ search.trim() ? '没有匹配的资源，请试试其他关键词。' : emptyText }}</p>
         </div>
 
         <ul v-else class="ws-resources__list">
@@ -93,6 +95,7 @@
           <div class="segmented-tabs"><button type="button" :class="{ active: noteMode === 'edit' }" @click="noteMode = 'edit'">编辑</button><button type="button" :class="{ active: noteMode === 'preview' }" @click="noteMode = 'preview'">预览</button></div>
           <textarea v-if="noteMode === 'edit'" v-model="noteForm.content" rows="8" placeholder="支持 Markdown" aria-label="便签内容" :readonly="archived"></textarea>
           <MarkdownRenderer v-else :content="noteForm.content" />
+          <p v-if="noteError" class="form-error" role="alert">{{ noteError }}</p>
         </div>
       </div>
       <template #footer>
@@ -109,7 +112,8 @@
         </label>
         <label class="full">
           链接
-          <input v-model="bookmarkForm.url" placeholder="https://" />
+          <input v-model="bookmarkForm.url" type="url" placeholder="https://" @input="bookmarkError = ''" />
+          <small v-if="bookmarkError" class="form-error" role="alert">{{ bookmarkError }}</small>
         </label>
         <label class="full">
           备注
@@ -134,6 +138,7 @@ import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 import { filterWorkspaceResourceRows } from './workspace-resource-filter.js';
 import { saveNoteRecord } from './note-record.js';
+import { bookmarkUrlError } from '../utils/bookmark-url.js';
 
 const props = defineProps({
   workspaceId: { type: String, required: true },
@@ -154,6 +159,7 @@ const tabs = [
 
 const activeTab = ref('favorite');
 const loading = ref(true);
+const loadError = ref('');
 const rows = ref([]);
 const search = ref('');
 const filteredRows = computed(() => filterWorkspaceResourceRows(rows.value, search.value));
@@ -167,7 +173,9 @@ const editingNoteId = ref(null);
 const editingBookmarkId = ref(null);
 const noteMode = ref('edit');
 const savingNote = ref(false);
+const noteError = ref('');
 const savingBookmark = ref(false);
+const bookmarkError = ref('');
 let mounted = true;
 let loadGeneration = 0;
 
@@ -189,6 +197,7 @@ async function load() {
   const tab = activeTab.value;
   const current = () => mounted && generation === loadGeneration && props.workspaceId === workspaceId && activeTab.value === tab;
   loading.value = true;
+  loadError.value = '';
   try {
     const [todos, goals, favorites, notes, bookmarks, apps] = await Promise.all([
       workbench.todos.list(),
@@ -282,7 +291,7 @@ async function load() {
       return row;
     });
   } catch (error) {
-    if (current()) { toast(error.message, 'error'); rows.value = []; }
+    if (current()) loadError.value = error.message || '未知错误';
   } finally {
     if (current()) loading.value = false;
   }
@@ -358,6 +367,7 @@ async function addApp() {
 }
 
 function openNoteForm() {
+  noteError.value = '';
   editingNoteId.value = null;
   noteForm.value = { title: '', content: '' };
   noteMode.value = 'edit';
@@ -365,6 +375,7 @@ function openNoteForm() {
 }
 
 function openNote(row) {
+  noteError.value = '';
   editingNoteId.value = row.id;
   noteForm.value = { title: row.raw.title || '', content: row.raw.content || '' };
   noteMode.value = 'preview';
@@ -376,6 +387,7 @@ async function saveNote() {
   if (props.archived) return;
   const workspaceId = props.workspaceId;
   savingNote.value = true;
+  noteError.value = '';
   try {
     const title = noteForm.value.title.trim();
     if (!title) throw new Error('请输入便签标题');
@@ -389,13 +401,14 @@ async function saveNote() {
     toast('便签已保存');
     reload();
   } catch (error) {
-    toast(error.message, 'error');
+    noteError.value = error.message || '便签保存失败，当前修改尚未保存。';
   } finally {
     savingNote.value = false;
   }
 }
 
 function openBookmarkForm() {
+  bookmarkError.value = '';
   editingBookmarkId.value = null;
   bookmarkForm.value = { title: '', url: '', note: '' };
   showBookmarkForm.value = true;
@@ -403,6 +416,7 @@ function openBookmarkForm() {
 
 function openBookmarkEdit(row) {
   if (props.archived) return;
+  bookmarkError.value = '';
   editingBookmarkId.value = row.id;
   bookmarkForm.value = { title: row.raw.title || '', url: row.raw.url || '', note: row.raw.note || '' };
   showBookmarkForm.value = true;
@@ -413,9 +427,12 @@ async function saveBookmark() {
   if (props.archived) return;
   const workspaceId = props.workspaceId;
   savingBookmark.value = true;
+  bookmarkError.value = '';
   try {
     const url = bookmarkForm.value.url.trim();
     if (!url) throw new Error('请输入链接');
+    const invalidUrl = bookmarkUrlError(url);
+    if (invalidUrl) throw new Error(invalidUrl);
     const data = { title: bookmarkForm.value.title.trim() || url, url, note: bookmarkForm.value.note };
     if (editingBookmarkId.value) await workbench.bookmarks.update(editingBookmarkId.value, data);
     else await workbench.bookmarks.create({ ...data, workspaceId });
@@ -424,7 +441,7 @@ async function saveBookmark() {
     toast('收藏已保存');
     reload();
   } catch (error) {
-    toast(error.message, 'error');
+    bookmarkError.value = error.message || '收藏保存失败';
   } finally {
     savingBookmark.value = false;
   }

@@ -16,17 +16,20 @@
         </label>
       </div>
 
-      <div v-if="loading" class="empty-state">正在加载工作空间…</div>
+      <div v-if="loading" class="empty-state" role="status">正在加载工作空间…</div>
+
+      <div v-else-if="listError" class="state-error" role="alert">工作空间加载失败：{{ listError }} <button class="ghost small" type="button" @click="loadWorkspaces">重试</button></div>
 
       <div v-else-if="!workspaces.length" class="panel ws-empty">
         <div class="empty-state">
           <div class="empty-icon"><LineIcon name="workspace" :size="34" /></div>
-          <h2>还没有工作空间</h2>
-          <p>
+          <h2>{{ showArchived ? '还没有工作空间' : '没有进行中的工作空间' }}</h2>
+          <p v-if="showArchived">
             工作空间可以把任务、文件、便签、应用和工作流集中在一个项目中。<br />
             开始工作后会自动记录时长，下次打开就能接着上次继续。
           </p>
-          <button class="primary" type="button" @click="openCreate">创建工作空间</button>
+          <p v-else>创建一个新项目，或查看已归档的工作空间。</p>
+          <button v-if="!showArchived" class="ghost" type="button" @click="showArchived = true">查看已归档</button>
         </div>
       </div>
 
@@ -50,9 +53,14 @@
           <button class="ghost small" type="button" @click="backToList">← 全部工作空间</button>
           <p class="view-kicker">WORKSPACE / {{ current.name }}</p>
           <h1>{{ current.name }}</h1>
-          <p>{{ current.description || '还没有填写描述' }}</p>
+          <p v-if="current.description">{{ current.description }}</p>
+          <span class="ws-status" :class="{ archived: current.archived, working: primaryAction.id === 'working' }">{{ current.archived ? '已归档' : primaryAction.id === 'working' ? '正在工作' : '进行中' }}</span>
         </div>
-        <div class="panel-actions">
+        <div class="panel-actions ws-detail-head__actions">
+          <span v-if="primaryAction.id === 'working'" class="ws-active-label">本次工作计时中</span>
+          <button v-else class="primary" type="button" :disabled="starting || resuming || (['start', 'resume'].includes(primaryAction.id) && (lastSessionLoading || Boolean(lastSessionError)))" @click="runPrimaryAction">
+            {{ lastSessionLoading && ['start', 'resume'].includes(primaryAction.id) ? '读取工作记录…' : primaryAction.id === 'resume' ? '继续上次工作' : primaryAction.label }}
+          </button>
           <button class="ghost small" type="button" @click="openEdit(current)">编辑</button>
           <button
             v-if="current.archived !== true"
@@ -62,29 +70,13 @@
           >
             归档
           </button>
-          <button v-else class="ghost small" type="button" @click="restoreWorkspace(current)">恢复</button>
         </div>
       </header>
 
-      <section class="ws-overview panel">
-        <div class="ws-overview__stats">
-          <div>
-            <span>未完成任务</span>
-            <strong>{{ current.pendingTodoCount || 0 }}</strong>
-          </div>
-          <div>
-            <span>累计工作时长</span>
-            <strong>{{ formatDuration(current.totalSeconds || 0) }}</strong>
-            <small class="ws-overview__hint">按工作开始日期统计</small>
-          </div>
-          <div>
-            <span>最近一次工作</span>
-            <strong>{{ current.lastWorkedAt ? formatRelative(current.lastWorkedAt) : '还没有记录' }}</strong>
-          </div>
-        </div>
-      </section>
+      <p v-if="listError" class="state-error" role="alert">工作空间更新失败：{{ listError }} <button class="ghost small" type="button" @click="loadWorkspaces">重试</button></p>
+      <p v-if="lastSessionError" class="state-error" role="alert">上次工作加载失败：{{ lastSessionError }} <button class="ghost small" type="button" @click="loadLastSession">重试</button></p>
 
-      <WorkSessionPanel v-if="current.archived !== true || (activeSession && activeSession.workspaceId === current.id)"
+      <WorkSessionPanel v-if="(current.archived !== true && !lastSession) || (activeSession && activeSession.workspaceId === current.id)"
         :workspace-id="current.id"
         :workspace-name="current.name"
         :active-workspace-name="activeWorkspaceName"
@@ -102,14 +94,19 @@
       />
       <div v-if="resumeWorkspaceId === current.id" class="ws-resume-feedback">
         <p v-if="resumeNotice" role="status">{{ resumeNotice }}</p>
-        <WorkflowRunResult v-if="resumeFeedback" :result="resumeFeedback.result" :error="resumeFeedback.error" :workflow-name="resumeFeedback.name" @close="resumeFeedback = null" />
+        <button v-if="resumeFeedback && !showResumeFeedback" class="ghost small" type="button" @click="showResumeFeedback = true">查看上次运行结果</button>
+        <WorkflowRunResult v-if="resumeFeedback && showResumeFeedback" :result="resumeFeedback.result" :error="resumeFeedback.error" :workflow-name="resumeFeedback.name" @close="showResumeFeedback = false" />
       </div>
 
-      <section class="ws-section">
-        <div class="ws-section__head">
-          <h2>工作历史</h2>
-          <p>这个工作空间的历史工作记录、备注与下一步；时长可以人工校正。</p>
+      <section class="ws-overview panel" aria-label="工作空间概览">
+        <div class="ws-overview__stats">
+          <div><span>未完成任务</span><strong>{{ current.pendingTodoCount || 0 }}</strong></div>
+          <div><span>累计工作</span><strong>{{ formatDuration(current.totalSeconds || 0) }}</strong></div>
+          <div><span>最近一次工作</span><strong>{{ current.lastWorkedAt ? formatRelative(current.lastWorkedAt) : '还没有记录' }}</strong></div>
         </div>
+      </section>
+
+      <section class="ws-section">
         <WorkspaceSessionHistory
           :key="current.id"
           ref="sessionHistoryRef"
@@ -201,15 +198,17 @@ import { useWorkSession } from '../composables/useWorkSession.js';
 import { toast } from '../composables/toast.js';
 import { formatDuration, formatRelative } from '../utils/duration.js';
 import { createWorkflowListLoader, resumeWorkspaceWorkflow } from '../utils/workflow-resume.mjs';
+import { workspacePrimaryAction } from '../components/workspace-primary-action.js';
 
 defineProps({
   settings: { type: Object, default: () => ({}) }
 });
 
-const { activeWorkspaceId, workspaceList, selectWorkspace, clearWorkspace, setWorkspaceList, ensureSelectionValid } = useWorkspace();
-const { activeSession, startSession, endSession } = useWorkSession();
+const { activeWorkspaceId, workspaceList, selectWorkspace, clearWorkspace, setWorkspaceList, ensureSelectionValid, takeWorkspaceAction } = useWorkspace();
+const { activeSession, startSession, endSession, workflowOpening, beginWorkflowOpening, finishWorkflowOpening } = useWorkSession();
 
 const loading = ref(true);
+const listError = ref('');
 const showArchived = ref(false);
 const showForm = ref(false);
 const editing = ref(null);
@@ -217,6 +216,7 @@ const workflows = ref([]);
 const starting = ref(false);
 const resuming = ref(false);
 const resumeFeedback = ref(null);
+const showResumeFeedback = ref(false);
 const resumeNotice = ref('');
 const resumeWorkspaceId = ref(null);
 let mounted = true;
@@ -239,6 +239,8 @@ const ending = ref(false);
 const showEndModal = ref(false);
 const sessionTodos = ref([]);
 const lastSession = ref(null);
+const lastSessionLoading = ref(true);
+const lastSessionError = ref('');
 const sessionHistoryRef = ref(null);
 const resourcesRef = ref(null);
 const todoPanelRef = ref(null);
@@ -275,6 +277,15 @@ const workspaces = computed(() => workspaceList.value);
 const current = computed(() => (
   workspaceList.value.find((item) => item.id === activeWorkspaceId.value) || null
 ));
+const primaryAction = computed(() => workspacePrimaryAction(current.value, activeSession.value, lastSession.value));
+
+function runPrimaryAction() {
+  if (!current.value) return;
+  if (primaryAction.value.id === 'start') startWork();
+  else if (primaryAction.value.id === 'resume') resumeLastWork();
+  else if (primaryAction.value.id === 'restore') restoreWorkspace(current.value);
+  else if (primaryAction.value.id === 'elsewhere') goActiveWorkspace();
+}
 
 const activeWorkspaceName = computed(() => {
   if (!activeSession.value) return '';
@@ -292,17 +303,26 @@ const sessionWorkspaceName = computed(() => {
 async function loadWorkspaces() {
   const generation = ++workspaceListGeneration;
   const includeArchived = showArchived.value;
+  loading.value = !workspaceList.value.length;
+  listError.value = '';
   try {
     const list = await workbench.workspaces.list({ includeArchived });
     if (!mounted || generation !== workspaceListGeneration || includeArchived !== showArchived.value) return;
     setWorkspaceList(list);
     ensureSelectionValid();
   } catch (error) {
-    if (mounted && generation === workspaceListGeneration) { toast(error.message, 'error'); setWorkspaceList([]); }
+    if (mounted && generation === workspaceListGeneration) listError.value = error.message || '未知错误';
   } finally {
     if (mounted && generation === workspaceListGeneration) loading.value = false;
   }
-  if (mounted && generation === workspaceListGeneration) await loadLastSession();
+  if (mounted && generation === workspaceListGeneration && !listError.value) {
+    await loadLastSession();
+    if (current.value) {
+      const action = takeWorkspaceAction(current.value.id);
+      if (action === 'resume') resumeLastWork();
+      if (action === 'end') openEndModal();
+    }
+  }
 }
 
 function loadWorkflows() {
@@ -417,6 +437,10 @@ async function startWork() {
 }
 
 async function openEndModal() {
+  if (resuming.value || workflowOpening?.value) {
+    toast('正在恢复工作环境，请等待工作流结束后再结束工作。', 'warning');
+    return;
+  }
   await loadSessionTodos();
   showEndModal.value = true;
 }
@@ -426,6 +450,7 @@ async function finishWork(payload) {
   try {
     await endSession(payload);
     showEndModal.value = false;
+    resumeNotice.value = '';
     toast('本次工作已保存');
     await loadWorkspaces();
     await reloadSessionHistory();
@@ -454,13 +479,18 @@ async function loadLastSession() {
   const workspaceId = current.value && current.value.id;
   if (!current.value) {
     lastSession.value = null;
+    lastSessionLoading.value = false;
     return;
   }
+  lastSessionLoading.value = true;
+  lastSessionError.value = '';
   try {
     const session = await workbench.sessions.last(workspaceId);
     if (mounted && generation === lastSessionGeneration && current.value && current.value.id === workspaceId) lastSession.value = session;
-  } catch (_) {
-    if (mounted && generation === lastSessionGeneration && current.value && current.value.id === workspaceId) lastSession.value = null;
+  } catch (error) {
+    if (mounted && generation === lastSessionGeneration && current.value && current.value.id === workspaceId) lastSessionError.value = error.message || '未知错误';
+  } finally {
+    if (mounted && generation === lastSessionGeneration && current.value && current.value.id === workspaceId) lastSessionLoading.value = false;
   }
 }
 
@@ -480,6 +510,7 @@ async function resumeLastWork() {
   resuming.value = true;
   resumeWorkspaceId.value = workspaceId;
   resumeFeedback.value = null;
+  showResumeFeedback.value = false;
   resumeNotice.value = '';
   try {
     const result = await resumeWorkspaceWorkflow({
@@ -488,6 +519,8 @@ async function resumeLastWork() {
       isCurrent: () => isCurrentResumeAttempt(attempt),
       startSession,
       runDetailed: workbench.workflows.runDetailed,
+      onBeforeWorkflow: (session) => beginWorkflowOpening(session.id),
+      onAfterWorkflow: (session) => finishWorkflowOpening(session.id),
       onStarted: async () => {
         if (isCurrentResumeAttempt(attempt)) resumeNotice.value = '工作已开始，正在计时；正在打开工作环境…';
         if (mounted) await loadWorkspaces();
@@ -496,6 +529,7 @@ async function resumeLastWork() {
     if (isCurrentResumeAttempt(attempt)) {
       resumeNotice.value = result.notice;
       resumeFeedback.value = result.feedback;
+      showResumeFeedback.value = Boolean(result.feedback);
     }
   } catch (error) {
     if (isCurrentResumeAttempt(attempt)) resumeNotice.value = `开始工作失败：${error.message || '未知错误'}`;
@@ -510,8 +544,11 @@ async function resumeLastWork() {
 watch(activeWorkspaceId, () => {
   lastSessionGeneration++;
   lastSession.value = null;
+  lastSessionLoading.value = true;
+  lastSessionError.value = '';
   invalidateResumeAttempt();
   resumeFeedback.value = null;
+  showResumeFeedback.value = false;
   resumeNotice.value = '';
   resumeWorkspaceId.value = null;
 }, { flush: 'sync' });

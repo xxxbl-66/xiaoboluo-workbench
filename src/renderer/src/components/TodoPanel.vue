@@ -11,8 +11,8 @@
 
     <div class="todo-module__meta">
       <div class="todo-module__stack">
-        <span>CURRENT STACK</span>
-        <strong>{{ pendingCount }} / {{ maxTasks }}</strong>
+        <span>当前待办</span>
+        <strong>{{ pendingCount }} 项未完成</strong>
       </div>
       <div class="todo-module__filters">
         <button
@@ -46,6 +46,7 @@
             class="todo-module__check"
             :class="{ done: todo.completed }"
             type="button"
+            :aria-label="`${todo.completed ? '标记未完成' : '标记完成'}：${todo.title}`"
             @click="toggleTodo(todo)"
           >
             <LineIcon v-if="todo.completed" name="check" :size="14" />
@@ -62,18 +63,16 @@
             </div>
           </div>
 
-          <button class="todo-module__delete" type="button" title="删除" @click="removeTodo(todo)">
+          <button class="todo-module__delete" type="button" :aria-label="`删除待办：${todo.title}`" @click="removeTodo(todo)">
             <LineIcon name="trash" :size="17" />
           </button>
         </article>
       </div>
 
-      <div v-else class="todo-module__empty">暂无待办</div>
+      <div v-else class="todo-module__empty">{{ filter === 'pending' && scopedTodos.length ? '没有未完成的待办。' : '这里还没有待办。输入上方的任务标题开始添加。' }}</div>
 
-      <button class="todo-module__clear" type="button" @click="clearCompleted">清除待办</button>
+      <button class="todo-module__clear" type="button" @click="clearCompleted">清除已完成</button>
     </div>
-
-    <p class="todo-module__end">END OF TODAY'S LIST</p>
 
     <Modal v-model="showModal" :title="editingTodo ? '编辑待办' : '新建待办'" width="520px" @close="closeModal">
       <div class="todo-form">
@@ -145,7 +144,6 @@ const draft = ref({ title: '' });
 const showModal = ref(false);
 const editingTodo = ref(null);
 const form = ref({ title: '', importance: 'high', urgency: 'high', dueDate: '', reminderAt: '' });
-const maxTasks = 10;
 let reminderTimer = null;
 
 function sameWorkspace(todo) {

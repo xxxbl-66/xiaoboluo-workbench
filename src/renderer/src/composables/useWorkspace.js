@@ -9,6 +9,7 @@ import { computed, ref } from 'vue';
  */
 
 const activeWorkspaceId = ref(null);
+const pendingAction = ref(null);
 /** 最近一次 workspaces:list 的结果，供驾驶舱等页面共享，避免重复 IPC */
 const workspaceList = ref([]);
 
@@ -18,10 +19,26 @@ const activeWorkspace = computed(() => (
 
 function selectWorkspace(id) {
   activeWorkspaceId.value = id ? String(id) : null;
+  if (pendingAction.value?.workspaceId !== activeWorkspaceId.value) pendingAction.value = null;
 }
 
 function clearWorkspace() {
   activeWorkspaceId.value = null;
+  pendingAction.value = null;
+}
+
+function requestWorkspaceAction(workspaceId, action) {
+  const id = workspaceId ? String(workspaceId) : null;
+  if (!id || !['resume', 'end'].includes(action)) return;
+  activeWorkspaceId.value = id;
+  pendingAction.value = { workspaceId: id, action };
+}
+
+function takeWorkspaceAction(workspaceId) {
+  if (pendingAction.value?.workspaceId !== workspaceId) return null;
+  const action = pendingAction.value.action;
+  pendingAction.value = null;
+  return action;
 }
 
 function setWorkspaceList(list) {
@@ -42,6 +59,8 @@ export function useWorkspace() {
     workspaceList,
     selectWorkspace,
     clearWorkspace,
+    requestWorkspaceAction,
+    takeWorkspaceAction,
     setWorkspaceList,
     ensureSelectionValid
   };

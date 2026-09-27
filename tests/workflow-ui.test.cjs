@@ -195,7 +195,7 @@ test('A 等待时切到 B 并立即继续，旧 A 不清理 B 的忙碌状态或
     await vue.nextTick();
     assert.deepEqual(starts, ['ws-b']);
     assert.deepEqual(runs, ['wf-b']);
-    assert.match(textOf(root), /正在恢复…/, 'A 的旧 finally 不能清掉 B 的忙碌状态');
+    assert.match(textOf(root), /正在打开工作环境|正在恢复工作环境/, 'A 的旧 finally 不能清掉 B 的忙碌状态');
     finishB({ ok: true, totalCount: 1, successCount: 1, failedCount: 0, steps: [{ index: 0, type: 'url', label: 'B 结果', ok: true }] });
     await new Promise((resolve) => setTimeout(resolve, 0));
     await vue.nextTick();
@@ -506,6 +506,41 @@ test('Workspace 手动运行显示逐步结果并阻止重复点击', async () =
   }
 });
 
+test('Workspace 最近一次工作流结果关闭后可重看，下一次覆盖，切空间清空', async () => {
+  const vue = require('vue');
+  let count = 0;
+  global.window = { workbench: { workflows: { runDetailed: async () => ({
+    ok: true, totalCount: 1, successCount: 1, failedCount: 0,
+    steps: [{ index: 0, type: 'url', label: `结果 ${++count}`, ok: true }]
+  }) } } };
+  try {
+    const Component = await loadComponent('src/renderer/src/components/WorkspaceWorkflows.vue');
+    const { renderer, node, textOf, find } = hostRenderer(vue);
+    const root = node('root');
+    const workflows = [{ id: 'wf', name: '开发环境', steps: [{ type: 'url' }] }];
+    renderer.render(vue.h(Component, { workspace: { id: 'A', workflowIds: ['wf'] }, workflows }), root);
+    find(root, (item) => item.type === 'button' && textOf(item).includes('运行')).props.onClick();
+    await new Promise(setImmediate); await vue.nextTick();
+    assert.match(textOf(root), /全部成功/);
+    find(root, (item) => item.type === 'button' && textOf(item) === '关闭').props.onClick();
+    await vue.nextTick();
+    assert.doesNotMatch(textOf(root), /全部成功/);
+    const reopen = find(root, (item) => item.type === 'button' && textOf(item).includes('查看上次运行结果'));
+    assert.ok(reopen);
+    reopen.props.onClick(); await vue.nextTick();
+    find(root, (item) => item.type === 'button' && textOf(item) === '查看步骤').props.onClick();
+    await vue.nextTick();
+    assert.match(textOf(root), /结果 1/);
+    find(root, (item) => item.type === 'button' && textOf(item).includes('运行')).props.onClick();
+    await new Promise(setImmediate); await vue.nextTick();
+    assert.doesNotMatch(textOf(root), /结果 1/);
+    renderer.render(vue.h(Component, { workspace: { id: 'B', workflowIds: [] }, workflows }), root);
+    await vue.nextTick();
+    assert.doesNotMatch(textOf(root), /查看上次运行结果|全部成功/);
+    renderer.render(null, root);
+  } finally { delete global.window; }
+});
+
 test('切换 Workspace 后，旧工作流异步结果不会显示在新空间', async () => {
   const vue = require('vue');
   let finish;
@@ -550,7 +585,7 @@ test('编辑保存失败后工作流名称和步骤仍留在表单', async () =>
     app.mount(root);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await vue.nextTick();
-    find(root, (item) => item.type === 'button' && textOf(item) === '✎').props.onClick();
+    find(root, (item) => item.type === 'button' && String(item.props['aria-label'] || '').startsWith('编辑')).props.onClick();
     await vue.nextTick();
     const nameInput = find(body, (item) => item.type === 'input' && item.props.placeholder === '例如：开始一天');
     assert.ok(nameInput);
@@ -602,7 +637,7 @@ test('旧工作流的非法 URL 在对应步骤旁显示错误，不能静默保
     app.mount(root);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await vue.nextTick();
-    find(root, (item) => item.type === 'button' && textOf(item) === '✎').props.onClick();
+    find(root, (item) => item.type === 'button' && String(item.props['aria-label'] || '').startsWith('编辑')).props.onClick();
     await vue.nextTick();
     await find(body, (item) => item.type === 'button' && textOf(item) === '保存').props.onClick();
     await vue.nextTick();

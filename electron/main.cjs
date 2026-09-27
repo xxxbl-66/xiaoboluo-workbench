@@ -19,6 +19,23 @@ let store = null;
 let pendingSecondInstanceFocus = false;
 let migrationState = { schemaVersion: 0, ranAt: null, error: null, repaired: [], fatal: false };
 
+// 仅供未打包开发版的真实 GUI 验证。显式传入独立目录后，文档数据和 Electron
+// profile 都落在其中；正式安装版始终沿用 Windows Documents 下的历史目录。
+if (!app.isPackaged && process.env.WORKBENCH_GUI_TEST_ROOT) {
+  const isolatedRoot = path.resolve(process.env.WORKBENCH_GUI_TEST_ROOT);
+  const actualDocuments = path.resolve(app.getPath('documents'));
+  if (isSameOrNested(isolatedRoot, actualDocuments) || isSameOrNested(actualDocuments, isolatedRoot)) {
+    throw new Error('GUI 隔离目录不能与真实文档目录重叠');
+  }
+  const isolatedDocuments = path.join(isolatedRoot, 'Documents');
+  const isolatedProfile = path.join(isolatedRoot, 'ElectronProfile');
+  fs.mkdirSync(isolatedDocuments, { recursive: true });
+  fs.mkdirSync(isolatedProfile, { recursive: true });
+  app.setPath('documents', isolatedDocuments);
+  app.setPath('userData', isolatedProfile);
+  console.log('[gui-test] isolated documents:', isolatedDocuments);
+}
+
 /**
  * 启动时的数据安全闸门。
  *
@@ -1449,8 +1466,9 @@ function registerIpc() {
 
     return sessions.map((session) => {
       const ids = Array.isArray(session.completedTodoIds) ? session.completedTodoIds : [];
-      const completedTodos = Array.isArray(session.completedTodoSnapshots)
-        ? session.completedTodoSnapshots
+      const snapshots = validCompletedSnapshots(session.completedTodoSnapshots);
+      const completedTodos = snapshots.length
+        ? snapshots
         : ids.map((todoId) => {
         const todo = todoById.get(todoId);
         return {
@@ -1478,8 +1496,9 @@ function registerIpc() {
     const todos = readTodos();
     const completed = new Set(Array.isArray(session.completedTodoIds) ? session.completedTodoIds : []);
     const todoById = new Map(todos.filter((todo) => todo && todo.id).map((todo) => [todo.id, todo]));
-    const completedTodos = Array.isArray(session.completedTodoSnapshots)
-      ? session.completedTodoSnapshots
+    const snapshots = validCompletedSnapshots(session.completedTodoSnapshots);
+    const completedTodos = snapshots.length
+      ? snapshots
       : [...completed].map((todoId) => {
         const todo = todoById.get(todoId);
         return { id: todoId, title: todo ? todo.title : '（原任务已删除）', missing: !todo };
@@ -1551,6 +1570,13 @@ function registerIpc() {
  * 把一条已有资源关联到 Workspace（只更新外键，不复制资源）。
  * kind: 'todo' | 'goal' | 'note' | 'bookmark' | 'app' | 'favorite'
  */
+function validCompletedSnapshots(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => item && typeof item === 'object' && !Array.isArray(item)
+    && typeof item.id === 'string' && item.id.trim()
+    && typeof item.title === 'string' && item.title.trim());
+}
+
 function linkResource(payload) {
   const kind = String(payload.kind || '');
   const resourceId = String(payload.id || '');
@@ -1613,6 +1639,11 @@ function linkResource(payload) {
     const items = fileService.readFavorites(store);
     const index = items.findIndex((item) => item.id === resourceId);
     if (index === -1) throw new Error('收藏的文件不存在');
+    if (items.some((item, otherIndex) => otherIndex !== index
+      && item.path === items[index].path
+      && workspaceService.normalizeWorkspaceId(item.workspaceId) === workspaceId)) {
+      throw new Error('该工作空间已收藏此路径。');
+    }
     items[index] = { ...items[index], workspaceId };
     fileService.writeFavorites(store, items);
     return items[index];

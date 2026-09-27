@@ -3,29 +3,32 @@
     <div class="panel-head">
       <div>
         <h2>工作流</h2>
-        <p>把常用动作串成一条快捷流程。</p>
+        <p>预设要打开的应用、文件和网页。运行工作流不会开始计时。</p>
       </div>
       <button class="primary" type="button" @click="openCreate">新建工作流</button>
     </div>
 
-    <div v-if="workflows.length" class="workflow-list">
+    <div v-if="loading" class="empty-state small" role="status">正在加载工作流…</div>
+    <div v-else-if="listError" class="state-error" role="alert">{{ listError }} <button class="ghost small" type="button" @click="loadData">重试</button></div>
+    <div v-else-if="workflows.length" class="workflow-list">
       <article v-for="workflow in workflows" :key="workflow.id" class="workflow-card">
         <div class="workflow-main">
           <strong>{{ workflow.name }}</strong>
-          <span>{{ (workflow.steps || []).length }} 个步骤</span>
+          <span>{{ workflowSummary(workflow) }}</span>
         </div>
         <div class="workflow-actions">
           <button class="ghost small" type="button" :disabled="Boolean(running)" @click="runWorkflow(workflow)">{{ running === workflow.id ? '运行中…' : '运行' }}</button>
-          <button class="icon-button" type="button" @click="openEdit(workflow)">✎</button>
-          <button class="icon-button danger" type="button" @click="removeWorkflow(workflow)">🗑</button>
+          <button class="icon-button" type="button" :aria-label="`编辑${workflow.name}`" @click="openEdit(workflow)"><LineIcon name="edit" :size="16" /></button>
+          <button class="icon-button danger" type="button" :aria-label="`删除${workflow.name}`" @click="removeWorkflow(workflow)"><LineIcon name="trash" :size="16" /></button>
         </div>
       </article>
     </div>
     <div v-else class="empty-state small">
-      <p>还没有工作流，创建一个试试。</p>
+      <p>还没有工作流。新建后，可以一键打开常用工作环境。</p>
     </div>
     <p v-if="running" role="status">工作流正在按顺序执行…</p>
-    <WorkflowRunResult v-if="runFeedback" :result="runFeedback.result" :error="runFeedback.error" :workflow-name="runFeedback.name" @close="runFeedback = null" />
+    <button v-if="runFeedback && !showRunFeedback" class="ghost small" type="button" @click="showRunFeedback = true">查看上次运行结果</button>
+    <WorkflowRunResult v-if="runFeedback && showRunFeedback" :result="runFeedback.result" :error="runFeedback.error" :workflow-name="runFeedback.name" @close="showRunFeedback = false" />
 
     <Modal v-model="showModal" :title="editingWorkflow ? '编辑工作流' : '新建工作流'" width="620px" @close="closeModal">
       <label>
@@ -37,13 +40,13 @@
       <div class="steps-editor">
         <div class="steps-title">执行步骤</div>
         <div v-for="(step, index) in form.steps" :key="step.id || index" class="workflow-step">
-          <div class="step-row">
+          <div class="step-row" :class="{ 'step-row--path': step.type === 'file' }">
           <span class="workflow-step__number">{{ index + 1 }}.</span>
           <select v-model="step.type" @change="delete stepErrors[index]">
             <option v-if="!['app', 'file', 'url'].includes(step.type)" :value="step.type" disabled>未知类型</option>
-            <option value="app">启动应用</option>
-            <option value="file">打开文件或文件夹</option>
-            <option value="url">打开网页</option>
+            <option value="app">应用</option>
+            <option value="file">文件 / 文件夹</option>
+            <option value="url">网页</option>
           </select>
 
           <select v-if="step.type === 'app'" v-model="step.appId" @change="delete stepErrors[index]">
@@ -84,6 +87,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import Modal from './Modal.vue';
+import LineIcon from './LineIcon.vue';
 import WorkflowRunResult from './WorkflowRunResult.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
@@ -102,6 +106,9 @@ const saving = ref(false);
 const choosingPath = ref(false);
 const running = ref(null);
 const runFeedback = ref(null);
+const showRunFeedback = ref(false);
+const loading = ref(true);
+const listError = ref('');
 let mounted = true;
 let stepSeed = 0;
 
@@ -171,12 +178,30 @@ function normalizeWorkflow(item) {
   return { ...item, steps: Array.isArray(item.steps) ? item.steps : [] };
 }
 
+function workflowSummary(workflow) {
+  const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+  if (!steps.length) return '尚无步骤';
+  const label = (step) => {
+    if (!step || typeof step !== 'object') return '无效步骤';
+    if (step.type === 'app') return apps.value.find((item) => item.id === step.appId)?.name || '应用';
+    if (step.type === 'file') return String(step.path || '').split(/[\\/]/).filter(Boolean).pop() || '文件';
+    if (step.type === 'url') {
+      try { return new URL(step.url).hostname; } catch (_) { return '网页'; }
+    }
+    return '未知步骤';
+  };
+  const preview = steps.slice(0, 3).map(label).join(' → ');
+  return `${steps.length} 步 · ${preview}${steps.length > 3 ? ' …' : ''}`;
+}
+
 async function loadData() {
+  loading.value = true;
+  listError.value = '';
   try {
     const list = await workbench.workflows.list();
     if (mounted) workflows.value = list.map(normalizeWorkflow);
   } catch (error) {
-    if (mounted) toast(error.message, 'error');
+    if (mounted) listError.value = `工作流加载失败：${error.message || '未知错误'}`;
   }
   try {
     const list = await workbench.apps.list();
@@ -190,6 +215,7 @@ async function loadData() {
       toast(error.message, 'error');
     }
   }
+  if (mounted) loading.value = false;
 }
 
 async function saveWorkflow() {
@@ -223,11 +249,18 @@ async function runWorkflow(workflow) {
   if (running.value) return;
   running.value = workflow.id;
   runFeedback.value = null;
+  showRunFeedback.value = false;
   try {
     const result = await workbench.workflows.runDetailed(workflow.id);
-    if (mounted) runFeedback.value = { name: workflow.name, result, error: '' };
+    if (mounted) {
+      runFeedback.value = { name: workflow.name, result, error: '' };
+      showRunFeedback.value = true;
+    }
   } catch (error) {
-    if (mounted) runFeedback.value = { name: workflow.name, result: null, error: error.message || '执行失败' };
+    if (mounted) {
+      runFeedback.value = { name: workflow.name, result: null, error: error.message || '执行失败' };
+      showRunFeedback.value = true;
+    }
   } finally {
     running.value = null;
   }
@@ -248,7 +281,10 @@ onBeforeUnmount(() => { mounted = false; });
 .workflow-step .step-row { grid-template-columns: 20px 150px minmax(0, 1fr) 108px; }
 .workflow-step__number { color: var(--text-muted); font-size: 12px; }
 .workflow-step__actions, .workflow-path { display: flex; align-items: center; gap: 4px; }
-.workflow-path input { min-width: 0; flex: 1; }
+.workflow-path { flex-wrap: wrap; min-width: 0; }
+.workflow-path input { min-width: 0; flex: 1 1 280px; }
+.step-row--path .workflow-path { grid-column: 2 / 5; grid-row: 2; }
+.step-row--path .workflow-step__actions { grid-column: 4; grid-row: 1; }
 .workflow-path button { white-space: nowrap; }
 .workflow-step__legacy { color: var(--warning); font-size: 12px; }
 @media (max-width: 680px) { .workflow-step .step-row { grid-template-columns: 20px 1fr 108px; } .workflow-step .step-row > :nth-child(3) { grid-column: 2 / 4; grid-row: 2; } .workflow-path { flex-wrap: wrap; } }

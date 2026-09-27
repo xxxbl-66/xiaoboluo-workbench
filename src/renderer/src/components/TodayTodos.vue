@@ -2,7 +2,7 @@
   <section class="panel compact-panel today-todos">
     <div class="panel-head">
       <div>
-        <h2>今日待办</h2>
+        <h2>待办进展</h2>
         <p>{{ completedCount }}/{{ totalCount }} 已完成<span v-if="allDone" class="all-done-label"> · 已全部完成</span></p>
       </div>
       <div class="today-progress" :title="`完成进度 ${completionPercent}%`">
@@ -28,7 +28,7 @@
           class="mini-todo__check"
           :class="{ done: todo.completed }"
           type="button"
-          title="标记完成"
+          :aria-label="`${todo.completed ? '标记未完成' : '标记完成'}：${todo.title}`"
           @click="toggleTodo(todo)"
         >
           <LineIcon v-if="todo.completed" name="check" :size="13" />
@@ -39,13 +39,15 @@
       </div>
     </div>
     <div v-else class="empty-state small">
-      <p>今天没有待办，休息一下</p>
+      <p>{{ allDone ? '当前待办已全部完成。' : '还没有待办。可以添加一项要推进的任务。' }}</p>
+      <button class="ghost small" type="button" @click="$emit('go-todos')">{{ allDone ? '查看待办' : '添加待办' }}</button>
     </div>
+    <p v-if="todoError" class="state-error" role="alert">{{ todoError }}</p>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import LineIcon from './LineIcon.vue';
 import { useTodosStore } from '../composables/useTodosStore.js';
 import { workbench } from '../composables/useWorkbench.js';
@@ -54,6 +56,7 @@ import { getQuadrant, sortTodosByQuadrant } from '../utils/quadrant.js';
 defineEmits(['go-todos']);
 
 const { todos, loadTodos } = useTodosStore();
+const todoError = ref('');
 const radius = 26;
 const circumference = 2 * Math.PI * radius;
 
@@ -83,10 +86,14 @@ function formatDate(value) {
 }
 
 async function toggleTodo(todo) {
+  todoError.value = '';
   try {
-    await workbench.todos.update(todo.id, { completed: !todo.completed });
+    const updated = await workbench.todos.update(todo.id, { completed: !todo.completed });
+    if (!updated) throw new Error('待办已不存在，未能更新状态。');
     await loadTodos();
-  } catch (_) {}
+  } catch (error) {
+    todoError.value = error.message || '更新待办失败，请重试。';
+  }
 }
 
 onMounted(loadTodos);

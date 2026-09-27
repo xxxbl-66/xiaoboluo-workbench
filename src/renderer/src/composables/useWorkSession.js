@@ -17,6 +17,9 @@ const elapsedSeconds = ref(0);
 const isWorking = computed(() => Boolean(activeSession.value && !activeSession.value.endedAt));
 const loading = ref(false);
 const error = ref('');
+const workflowOpeningSessionId = ref(null);
+const workflowOpening = computed(() => Boolean(activeSession.value
+  && workflowOpeningSessionId.value === activeSession.value.id));
 
 /**
  * 异常退出后的待处理状态（P1-01 / 阶段 F）。
@@ -45,6 +48,7 @@ function isPendingRestoreDecision(session) {
 
 function applySession(session) {
   activeSession.value = session || null;
+  if (!activeSession.value) workflowOpeningSessionId.value = null;
   if (activeSession.value) {
     if (isPendingRestoreDecision(activeSession.value)) {
       needsRestoreDecision.value = true;
@@ -166,6 +170,7 @@ async function startSession(workspaceId) {
 async function endSession(patch = {}) {
   const session = activeSession.value;
   if (!session) throw new Error('当前没有正在进行的工作');
+  if (workflowOpening.value) throw new Error('正在恢复工作环境，请等待工作流结束后再结束工作。');
   loading.value = true;
   error.value = '';
   try {
@@ -180,6 +185,14 @@ async function endSession(patch = {}) {
   }
 }
 
+function beginWorkflowOpening(sessionId) {
+  if (activeSession.value?.id === sessionId) workflowOpeningSessionId.value = sessionId;
+}
+
+function finishWorkflowOpening(sessionId) {
+  if (workflowOpeningSessionId.value === sessionId) workflowOpeningSessionId.value = null;
+}
+
 export function useWorkSession() {
   return {
     activeSession,
@@ -187,6 +200,9 @@ export function useWorkSession() {
     isWorking,
     loading,
     error,
+    workflowOpening,
+    beginWorkflowOpening,
+    finishWorkflowOpening,
     needsRestoreDecision,
     restorePromptDismissed,
     initialized: () => initialized,

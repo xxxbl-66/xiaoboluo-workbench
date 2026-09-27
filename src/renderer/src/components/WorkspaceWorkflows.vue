@@ -27,7 +27,8 @@
       有 {{ missingIds.length }} 个已绑定的工作流已被删除。{{ missingIds.includes(workspace.resumeWorkflowId) ? '默认工作流已失效，请编辑工作空间重新选择。' : '请编辑工作空间移除失效绑定。' }}
     </p>
     <p v-if="running" role="status">工作流正在按顺序执行…</p>
-    <WorkflowRunResult v-if="feedback" :result="feedback.result" :error="feedback.error" :workflow-name="feedback.name" @close="feedback = null" />
+    <button v-if="feedback && !showFeedback" class="ghost small" type="button" @click="showFeedback = true">查看上次运行结果</button>
+    <WorkflowRunResult v-if="feedback && showFeedback" :result="feedback.result" :error="feedback.error" :workflow-name="feedback.name" @close="showFeedback = false" />
   </section>
 </template>
 
@@ -49,8 +50,9 @@ defineEmits(['changed']);
 
 const running = ref(null);
 const feedback = ref(null);
+const showFeedback = ref(false);
 let mounted = true;
-watch(() => props.workspace.id, () => { feedback.value = null; });
+watch(() => props.workspace.id, () => { feedback.value = null; showFeedback.value = false; });
 onBeforeUnmount(() => { mounted = false; });
 
 const ids = computed(() => (Array.isArray(props.workspace.workflowIds) ? props.workspace.workflowIds : []));
@@ -69,11 +71,18 @@ async function run(workflow) {
   const workspaceId = props.workspace.id;
   running.value = workflow.id;
   feedback.value = null;
+  showFeedback.value = false;
   try {
     const result = await workbench.workflows.runDetailed(workflow.id);
-    if (mounted && props.workspace.id === workspaceId) feedback.value = { name: workflow.name, result, error: '' };
+    if (mounted && props.workspace.id === workspaceId) {
+      feedback.value = { name: workflow.name, result, error: '' };
+      showFeedback.value = true;
+    }
   } catch (error) {
-    if (mounted && props.workspace.id === workspaceId) feedback.value = { name: workflow.name, result: null, error: error.message || '工作流执行失败' };
+    if (mounted && props.workspace.id === workspaceId) {
+      feedback.value = { name: workflow.name, result: null, error: error.message || '工作流执行失败' };
+      showFeedback.value = true;
+    }
   } finally {
     running.value = null;
   }

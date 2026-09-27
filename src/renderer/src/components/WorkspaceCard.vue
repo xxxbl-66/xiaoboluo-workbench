@@ -21,8 +21,8 @@
         <dd>{{ formatDuration(workspace.totalSeconds || 0) }}</dd>
       </div>
       <div>
-        <dt>最近打开</dt>
-        <dd>{{ workspace.lastOpenedAt ? formatRelative(workspace.lastOpenedAt) : '从未打开' }}</dd>
+        <dt>最近工作</dt>
+        <dd>{{ workspace.lastWorkedAt ? formatRelative(workspace.lastWorkedAt) : '还没有记录' }}</dd>
       </div>
     </dl>
 

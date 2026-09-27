@@ -16,9 +16,11 @@
       </div>
     </div>
 
-    <p v-if="errorMessage" class="session-history__error">{{ errorMessage }}</p>
+    <p v-if="errorMessage" class="state-error" role="alert">{{ errorMessage }} <button class="ghost small" type="button" @click="load(limit)">重试</button></p>
 
-    <div v-if="!loading && !sessions.length" class="empty-state small">
+    <p v-if="loading && !sessions.length" class="empty-state small" role="status">正在加载工作历史…</p>
+
+    <div v-else-if="!errorMessage && !sessions.length" class="empty-state small">
       <p>这个工作空间还没有已完成的工作记录。开始并结束一次工作后，这里会出现记录。</p>
     </div>
 
@@ -46,16 +48,15 @@
           </div>
         </div>
 
-        <p v-if="item.note" class="session-history__line">备注：{{ item.note }}</p>
-        <p v-if="item.nextStep" class="session-history__line">下一步：{{ item.nextStep }}</p>
         <p v-if="completedOf(item).length" class="session-history__line">
-          上次完成事项：{{ completedOf(item).map((todo) => todo.title).join('、') }}
+          完成事项：{{ completedOf(item).map((todo) => todo.title).join('、') }}
         </p>
-        <p v-if="item.originalDurationSeconds !== undefined && item.durationAdjustmentCount" class="session-history__line session-history__line--faint">
-          校正记录：原记录时长 {{ formatDuration(item.originalDurationSeconds) }}
-          <template v-if="item.durationAdjustedAt">，校正于 {{ formatDateTime(item.durationAdjustedAt) }}</template>
-          <template v-if="item.durationAdjustmentReason">，说明：{{ item.durationAdjustmentReason }}</template>
-        </p>
+        <p v-if="item.nextStep" class="session-history__line session-history__next">下一步：{{ item.nextStep }}</p>
+        <p v-if="item.note" class="session-history__line">备注：{{ item.note }}</p>
+        <details v-if="item.originalDurationSeconds !== undefined && item.durationAdjustmentCount" class="session-history__audit">
+          <summary>查看校正记录</summary>
+          <p class="session-history__line session-history__line--faint">原记录时长 {{ formatDuration(item.originalDurationSeconds) }}<template v-if="item.durationAdjustedAt">，校正于 {{ formatDateTime(item.durationAdjustedAt) }}</template><template v-if="item.durationAdjustmentReason">，说明：{{ item.durationAdjustmentReason }}</template></p>
+        </details>
       </li>
     </ul>
 
@@ -82,6 +83,7 @@ import SessionDurationAdjustModal from './SessionDurationAdjustModal.vue';
 import { workbench } from '../composables/useWorkbench.js';
 import { toast } from '../composables/toast.js';
 import { formatDuration, formatDateTime } from '../utils/duration.js';
+import { completedTodosOf } from './completed-todos.js';
 
 const props = defineProps({
   workspaceId: { type: String, required: true },
@@ -103,8 +105,7 @@ let mounted = true;
 let loadGeneration = 0;
 
 function completedOf(session) {
-  if (Array.isArray(session.completedTodoSnapshots)) return session.completedTodoSnapshots;
-  return Array.isArray(session.completedTodos) ? session.completedTodos : [];
+  return completedTodosOf(session);
 }
 
 /**

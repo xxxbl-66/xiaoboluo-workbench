@@ -21,12 +21,13 @@
       </ul>
 
       <p v-if="errorMessage" class="shutdown-confirm__error">{{ errorMessage }}</p>
+      <p v-else-if="workflowOpening" role="status">正在恢复工作环境…完成后可以结束工作。</p>
     </div>
 
     <template #footer>
       <button class="ghost" type="button" :disabled="busy" @click="backToWork">返回工作</button>
       <button class="ghost" type="button" :disabled="busy" @click="$emit('keep')">保留会话并退出</button>
-      <button class="primary" type="button" :disabled="busy" @click="$emit('end')">
+      <button class="primary" type="button" :disabled="busy || workflowOpening" @click="$emit('end')">
         {{ busy ? '处理中…' : '结束工作' }}
       </button>
     </template>
@@ -43,6 +44,7 @@ defineProps({
   workspaceName: { type: String, default: '' },
   elapsedSeconds: { type: Number, default: 0 },
   busy: { type: Boolean, default: false },
+  workflowOpening: { type: Boolean, default: false },
   errorMessage: { type: String, default: '' }
 });
 
